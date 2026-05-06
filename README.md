@@ -43,4 +43,10 @@ FlightInsight/
     │   └── fact_flightperformance.csv
     │
     └── manual_uploads/
-        └── manual_flights.csv
+
+In order to run this program for the first time, complete the following steps with your terminal:
+1. "python -m pip install -r requirements.txt"
+2. "python -m streamlit run run_app.py"
+3. If access to the admin site is required for manual data entry or viewing, run "python -m streamlit run admin_data_entry.py"
+
+If app has been run before and database is created and loaded, use "python -m streamlit run start_app.py" to start app without deleting and recreating the database
