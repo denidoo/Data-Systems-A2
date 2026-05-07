@@ -1,231 +1,240 @@
 import streamlit as st
 import pandas as pd
 
-from sklearn.preprocessing import LabelEncoder
-from sklearn.ensemble import RandomForestClassifier
-
 from database.db_config import engine
+from ml.predict import predict_from_details
 
 
 st.set_page_config(
     page_title="FlightInsight",
-    layout="centered"
+    page_icon="✈️",
+    layout="wide"
 )
 
-st.title("Flight Delay Predictor")
 
-st.write("Enter a flight number and departure date to predict whether the flight is likely to be delayed.")
+# ------------------------------------------------------------
+# DATABASE HELPERS
+# ------------------------------------------------------------
 
-def load_flight_data():
+@st.cache_data(ttl=3600)
+def get_flight_options():
     query = """
-        SELECT
-            f.flight_performance_id,
-            d.full_date,
-            t.hour,
-            t.minute,
-            t.time_of_day,
-            fl.flight_number,
-            fl.flight_type,
-            fl.route_category,
-            fl.route_distance,
-            al.airline_name,
-            al.airline_code,
-            oa.airport_code AS origin_airport,
-            da.airport_code AS destination_airport,
-            w.weather_type,
-            w.temperature,
-            w.wind_speed,
-            w.visibility,
-            ac.aircraft_model,
-            ac.manufacturer,
-            ac.seating_capacity,
-            ac.aircraft_category,
-            dc.delay_cause_type,
-            dc.is_controllable,
-            f.delay_minutes,
-            f.cancellation_flag,
-            f.passengers,
-            f.scheduled_departure_datetime,
-            f.actual_departure_datetime,
-            f.scheduled_arrival_datetime,
-            f.actual_arrival_datetime,
-            f.delay_status
-        FROM fact_flightperformance f
-        JOIN dim_date d ON f.date_id = d.date_id
-        JOIN dim_time t ON f.time_id = t.time_id
-        JOIN dim_flight fl ON f.flight_id = fl.flight_id
-        JOIN dim_airline al ON f.airline_id = al.airline_id
-        JOIN dim_airport oa ON f.origin_airport_id = oa.airport_id
-        JOIN dim_airport da ON f.destination_airport_id = da.airport_id
-        JOIN dim_weather_condition w ON f.weather_id = w.weather_id
-        JOIN dim_aircraft ac ON f.aircraft_id = ac.aircraft_id
-        JOIN dim_delay_cause dc ON f.delay_cause_id = dc.delay_cause_id;
+        SELECT DISTINCT
+            flight_number
+        FROM dim_flight
+        ORDER BY flight_number;
     """
-
     return pd.read_sql(query, engine)
 
 
-try:
-    df = load_flight_data()
-except Exception as e:
-    st.error("Could not connect to PostgreSQL or load flight data.")
-    st.write(e)
-    st.stop()
+@st.cache_data(ttl=3600)
+def get_airline_options():
+    query = """
+        SELECT
+            airline_id,
+            airline_code,
+            airline_name
+        FROM dim_airline
+        ORDER BY airline_code;
+    """
+    return pd.read_sql(query, engine)
 
 
-if df.empty:
-    st.error("No data found in the PostgreSQL database. Run create_tables.py and etl_load_data.py first.")
-    st.stop()
+@st.cache_data(ttl=3600)
+def get_airport_options():
+    query = """
+        SELECT
+            airport_id,
+            airport_code,
+            airport_name,
+            airport_city,
+            airport_country,
+            latitude,
+            longitude
+        FROM dim_airport
+        ORDER BY airport_code;
+    """
+    return pd.read_sql(query, engine)
 
 
-df["full_date"] = pd.to_datetime(df["full_date"])
-df["month"] = df["full_date"].dt.month
-df["day_of_week"] = df["full_date"].dt.dayofweek
-df["full_date"] = pd.to_datetime(df["full_date"]).dt.strftime("%Y-%m-%d")
+@st.cache_data(ttl=3600)
+def get_flight_route_details(flight_number):
+    query = """
+        SELECT
+            flight_number,
+            flight_type,
+            route_category,
+            route_distance
+        FROM dim_flight
+        WHERE flight_number = %(flight_number)s
+        LIMIT 1;
+    """
+
+    df = pd.read_sql(
+        query,
+        engine,
+        params={"flight_number": flight_number}
+    )
+
+    if df.empty:
+        return None
+
+    return df.iloc[0].to_dict()
 
 
-categorical_columns = [
-    "flight_number",
-    "flight_type",
-    "route_category",
-    "airline_name",
-    "airline_code",
-    "origin_airport",
-    "destination_airport",
-    "weather_type",
-    "aircraft_model",
-    "manufacturer",
-    "aircraft_category",
-    "delay_cause_type",
-    "time_of_day"
-]
+# ------------------------------------------------------------
+# UI
+# ------------------------------------------------------------
 
+st.title("FlightInsight")
+st.subheader("Flight Delay Prediction System")
 
-features = [
-    "flight_number",
-    "flight_type",
-    "route_category",
-    "route_distance",
-    "airline_name",
-    "airline_code",
-    "origin_airport",
-    "destination_airport",
-    "weather_type",
-    "temperature",
-    "wind_speed",
-    "visibility",
-    "aircraft_model",
-    "manufacturer",
-    "seating_capacity",
-    "aircraft_category",
-    "delay_cause_type",
-    "is_controllable",
-    "passengers",
-    "hour",
-    "minute",
-    "time_of_day",
-    "month",
-    "day_of_week"
-]
-
-
-model_df = df.copy()
-
-label_encoders = {}
-
-for column in categorical_columns:
-    encoder = LabelEncoder()
-    model_df[column] = encoder.fit_transform(model_df[column].astype(str))
-    label_encoders[column] = encoder
-
-
-target_encoder = LabelEncoder()
-model_df["delay_status"] = target_encoder.fit_transform(model_df["delay_status"].astype(str))
-
-
-X = model_df[features]
-y = model_df["delay_status"]
-
-
-model = RandomForestClassifier(
-    n_estimators=100,
-    random_state=42
+st.write(
+    "Enter flight details below to predict whether a flight is likely to be delayed."
 )
 
-model.fit(X, y)
+try:
+    flight_options = get_flight_options()
+    airline_options = get_airline_options()
+    airport_options = get_airport_options()
 
+except Exception as error:
+    st.error("Could not load data from the database.")
+    st.exception(error)
+    st.stop()
+
+
+if flight_options.empty:
+    st.warning("No flights found. Run the ETL pipeline first.")
+    st.stop()
+
+if airline_options.empty:
+    st.warning("No airlines found. Run the ETL pipeline first.")
+    st.stop()
+
+if airport_options.empty:
+    st.warning("No airports found. Run the ETL pipeline first.")
+    st.stop()
+
+
+# ------------------------------------------------------------
+# INPUT FORM
+# ------------------------------------------------------------
 
 with st.form("prediction_form"):
+    col1, col2 = st.columns(2)
 
-    input_flight_number = st.text_input(
-        "Flight Number",
-        placeholder="Example: AA1234"
-    )
+    with col1:
+        flight_number = st.selectbox(
+            "Flight Number",
+            flight_options["flight_number"].tolist()
+        )
 
-    input_departure_date = st.date_input(
-        "Departure Date"
-    )
+        flight_date = st.date_input("Departure Date")
 
-    submitted = st.form_submit_button("Predict")
+        scheduled_time = st.time_input("Scheduled Departure Time")
 
+    with col2:
+        airline_code = st.selectbox(
+            "Airline",
+            airline_options["airline_code"].tolist()
+        )
+
+        origin_airport_code = st.selectbox(
+            "Origin Airport",
+            airport_options["airport_code"].tolist()
+        )
+
+        destination_airport_code = st.selectbox(
+            "Destination Airport",
+            airport_options["airport_code"].tolist()
+        )
+
+    submitted = st.form_submit_button("Predict Delay")
+
+
+# ------------------------------------------------------------
+# PREDICTION
+# ------------------------------------------------------------
 
 if submitted:
+    route_details = get_flight_route_details(flight_number)
 
-    selected_date = pd.to_datetime(input_departure_date)
-    clean_flight_number = input_flight_number.strip().upper()
-
-    historical_flights = df[
-        df["flight_number"].astype(str).str.upper() == clean_flight_number
-    ]
-
-    if historical_flights.empty:
-        st.error("No historical records found for that flight number. The model needs past examples of this flight before it can predict it.")
+    if route_details is None:
+        st.error("Flight route details were not found in the database.")
         st.stop()
 
-    # Use the most recent historical record as the base flight profile
-    flight_record = historical_flights.sort_values("full_date").iloc[-1].copy()
+    origin_airport_df = airport_options[
+        airport_options["airport_code"] == origin_airport_code
+    ]
 
-    # Replace date-based fields with the user-selected date
-    flight_record["month"] = selected_date.month
-    flight_record["day_of_week"] = selected_date.dayofweek
+    if origin_airport_df.empty:
+        st.error("Origin airport details were not found.")
+        st.stop()
 
-    prediction_input = pd.DataFrame([flight_record])
-    prediction_input = prediction_input[features]
+    origin_airport = origin_airport_df.iloc[0]
 
-    # Encode categorical values safely
-    for column in categorical_columns:
-        prediction_input[column] = prediction_input[column].astype(str)
+    latitude = origin_airport.get("latitude", None)
+    longitude = origin_airport.get("longitude", None)
 
-        known_classes = set(label_encoders[column].classes_)
+    try:
+        result, input_df = predict_from_details(
+            flight_date=flight_date,
+            scheduled_hour=scheduled_time.hour,
+            scheduled_minute=scheduled_time.minute,
+            airline_code=airline_code,
+            origin_airport_code=origin_airport_code,
+            destination_airport_code=destination_airport_code,
+            flight_type=route_details.get("flight_type", "Domestic"),
+            route_category=route_details.get("route_category", "Unknown"),
+            route_distance=route_details.get("route_distance", 0),
+            aircraft_category="Unknown",
+            seating_capacity=0,
+            latitude=latitude,
+            longitude=longitude
+        )
 
-        if prediction_input[column].iloc[0] not in known_classes:
-            st.error(f"The value '{prediction_input[column].iloc[0]}' in column '{column}' was not seen during training.")
-            st.stop()
+        st.divider()
 
-        prediction_input[column] = label_encoders[column].transform(prediction_input[column])
+        if result["prediction_label"] == "Delayed":
+            st.error("Prediction: Flight is likely to be delayed")
+        else:
+            st.success("Prediction: Flight is likely to be on time")
 
-    prediction = model.predict(prediction_input)[0]
-    prediction_label = target_encoder.inverse_transform([prediction])[0]
+        if result["delay_probability"] is not None:
+            st.metric(
+                label="Delay Probability",
+                value=f"{result['delay_probability']:.2%}"
+            )
 
-    prediction_probability = model.predict_proba(prediction_input)[0]
-    confidence = max(prediction_probability) * 100
+        with st.expander("View prediction input features"):
+            st.dataframe(input_df)
 
-    if prediction_label == "Delayed":
-        st.error(f"Predicted Status: {prediction_label}")
-    else:
-        st.success(f"Predicted Status: {prediction_label}")
+    except FileNotFoundError:
+        st.error(
+            "Model file not found. Run the model training script first:\n\n"
+            "`python -m ml.train_model`"
+        )
 
-    st.write(f"**Model Confidence:** {confidence:.1f}%")
+    except Exception as error:
+        st.error("Prediction failed.")
+        st.exception(error)
 
-    st.write("### Prediction Factors Used")
-    st.write(f"**Flight Number:** {flight_record['flight_number']}")
-    st.write(f"**Selected Date:** {selected_date.strftime('%Y-%m-%d')}")
-    st.write(f"**Month:** {selected_date.month}")
-    st.write(f"**Day of Week:** {selected_date.day_name()}")
-    st.write(f"**Airline:** {flight_record['airline_name']}")
-    st.write(f"**Route:** {flight_record['origin_airport']} → {flight_record['destination_airport']}")
-    st.write(f"**Departure Time:** {flight_record['hour']:02d}:{flight_record['minute']:02d}")
-    st.write(f"**Time of Day:** {flight_record['time_of_day']}")
-    st.write(f"**Aircraft:** {flight_record['aircraft_model']}")
-    st.write(f"**Historical Weather Type:** {flight_record['weather_type']}")
-    st.write(f"**Historical Delay Cause:** {flight_record['delay_cause_type']}")
+
+# ------------------------------------------------------------
+# SIDEBAR
+# ------------------------------------------------------------
+
+st.sidebar.title("FlightInsight Menu")
+
+st.sidebar.write("Use this app to predict flight delay risk using:")
+st.sidebar.write("- Historical flight data")
+st.sidebar.write("- Airline and airport data")
+st.sidebar.write("- Route details")
+st.sidebar.write("- Real weather API data")
+
+st.sidebar.divider()
+
+if st.sidebar.button("Refresh Cached Data"):
+    st.cache_data.clear()
+    st.rerun()

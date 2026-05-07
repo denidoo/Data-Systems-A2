@@ -1,21 +1,34 @@
 import subprocess
 import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+APP_FILE = PROJECT_ROOT / "app.py"
 
 
 def run_command(command):
-    print(f"\nRunning: {command}\n")
-
-    result = subprocess.run(command, shell=True)
-
-    if result.returncode != 0:
-        print(f"\nCommand failed: {command}")
-        sys.exit(result.returncode)
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        shell=True
+    )
+    return result.returncode == 0
 
 
 def main():
-    run_command("python create_tables.py")
-    run_command("python etl_load_data.py")
-    run_command("python -m streamlit run app.py")
+    if not APP_FILE.exists():
+        print("Error: app.py was not found in the project root.")
+        return
+
+    print("Starting FlightInsight...")
+
+    command = f'"{sys.executable}" -m streamlit run "{APP_FILE}"'
+
+    success = run_command(command)
+
+    if not success:
+        print("Failed to start Streamlit app.")
 
 
 if __name__ == "__main__":
