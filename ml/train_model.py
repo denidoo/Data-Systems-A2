@@ -1,141 +1,177 @@
 import joblib
+import pandas as pd
 from pathlib import Path
 
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, GradientBoostingClassifier
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.tree import DecisionTreeClassifier
 
-from ml.feature_engineering import (
-    build_training_dataset,
-    prepare_features,
-    get_feature_columns
-)
+from ml.feature_engineering import build_training_dataset, prepare_features, get_feature_columns
 
 
 MODEL_DIR = Path("ml/models")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-MODEL_PATH = MODEL_DIR / "delay_model.pkl"
+MODEL_PATH = MODEL_DIR / "best_flight_delay_model.pkl"
 
 
 def build_preprocessor():
     numeric_features, categorical_features = get_feature_columns()
 
-    numeric_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
-    ])
+    numeric_transformer = Pipeline(
+        steps=[
+            ("scaler", StandardScaler())
+        ]
+    )
 
-    categorical_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OneHotEncoder(handle_unknown="ignore"))
-    ])
+    categorical_transformer = Pipeline(
+        steps=[
+            ("onehot", OneHotEncoder(handle_unknown="ignore"))
+        ]
+    )
 
     preprocessor = ColumnTransformer(
         transformers=[
-            ("numeric", numeric_transformer, numeric_features),
-            ("categorical", categorical_transformer, categorical_features)
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
         ]
     )
 
     return preprocessor
 
 
-def evaluate_model(name, model, X_test, y_test):
-    y_pred = model.predict(X_test)
+def get_models():
+    return {
+        "Decision Tree": DecisionTreeClassifier(
+            max_depth=10,
+            min_samples_split=10,
+            min_samples_leaf=5,
+            class_weight="balanced",
+            random_state=42
+        ),
 
-    results = {
-        "model": name,
-        "accuracy": accuracy_score(y_test, y_pred),
-        "precision": precision_score(y_test, y_pred, zero_division=0),
-        "recall": recall_score(y_test, y_pred, zero_division=0),
-        "f1": f1_score(y_test, y_pred, zero_division=0)
+        "Random Forest": RandomForestClassifier(
+            n_estimators=300,
+            max_depth=None,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1
+        ),
+
+        "Extra Trees": ExtraTreesClassifier(
+            n_estimators=300,
+            max_depth=None,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1
+        ),
+
+        "Gradient Boosting": GradientBoostingClassifier(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=3,
+            random_state=42
+        ),
     }
-
-    print(f"\n{name} Results")
-    print("-" * 40)
-    print(f"Accuracy:  {results['accuracy']:.4f}")
-    print(f"Precision: {results['precision']:.4f}")
-    print(f"Recall:    {results['recall']:.4f}")
-    print(f"F1-score:  {results['f1']:.4f}")
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred, zero_division=0))
-
-    return results
 
 
 def train_models():
-    print("Loading processed training data...")
+    print("Building training dataset...")
+
     df = build_training_dataset()
-
-    print(f"Training dataset rows: {len(df)}")
-
     X, y = prepare_features(df)
 
     if y.nunique() < 2:
-        raise ValueError(
-            "The target column only has one class. "
-            "You need both delayed and on-time flights to train a classifier."
-        )
+        raise ValueError("Target column only has one class. Model needs both delayed and not delayed records.")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
         test_size=0.2,
-        random_state=42,
-        stratify=y
+        stratify=y,
+        random_state=42
     )
 
-    preprocessor = build_preprocessor()
+    models = get_models()
 
-    models = {
-        "Logistic Regression": LogisticRegression(max_iter=1000),
-        "Random Forest": RandomForestClassifier(
-            n_estimators=150,
-            random_state=42,
-            class_weight="balanced",
-            n_jobs=-1
-        ),
-        "Hist Gradient Boosting": HistGradientBoostingClassifier(
-            random_state=42,
-            max_iter=150
-        )
-    }
-
-    trained_models = {}
     results = []
+    best_model = None
+    best_model_name = None
+    best_f1 = -1
 
-    for name, classifier in models.items():
-        print(f"\nTraining {name}...")
+    for model_name, model in models.items():
+        print(f"\nTraining {model_name}...")
 
-        pipeline = Pipeline(steps=[
-            ("preprocessor", preprocessor),
-            ("classifier", classifier)
-        ])
+        pipeline = Pipeline(
+            steps=[
+                ("preprocessor", build_preprocessor()),
+                ("model", model)
+            ]
+        )
 
         pipeline.fit(X_train, y_train)
 
-        result = evaluate_model(name, pipeline, X_test, y_test)
+        y_pred = pipeline.predict(X_test)
 
-        trained_models[name] = pipeline
-        results.append(result)
+        accuracy = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
 
-    best_result = max(results, key=lambda item: item["f1"])
-    best_model_name = best_result["model"]
-    best_model = trained_models[best_model_name]
+        results.append({
+            "model": model_name,
+            "accuracy": accuracy,
+            "f1_score": f1
+        })
+
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+        print("Confusion Matrix:")
+        print(confusion_matrix(y_test, y_pred))
+        print("Classification Report:")
+        print(classification_report(y_test, y_pred, zero_division=0))
+
+        if f1 > best_f1:
+            best_f1 = f1
+            best_model = pipeline
+            best_model_name = model_name
+
+    results_df = pd.DataFrame(results).sort_values(by="f1_score", ascending=False)
+
+    print("\nModel Comparison:")
+    print(results_df)
 
     joblib.dump(best_model, MODEL_PATH)
 
-    print("\nBest model selected:")
-    print(best_model_name)
-    print(f"Saved to: {MODEL_PATH}")
+    print(f"\nBest model: {best_model_name}")
+    print(f"Best F1 Score: {best_f1:.4f}")
+    print(f"Saved model to: {MODEL_PATH}")
 
-    return best_model
+    return best_model, results_df
+
+
+def load_model():
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"No trained model found at {MODEL_PATH}. Run ml/model.py first."
+        )
+
+    return joblib.load(MODEL_PATH)
+
+
+def predict_delay(input_df):
+    model = load_model()
+
+    prediction = model.predict(input_df)
+    prediction_probability = model.predict_proba(input_df)
+
+    return prediction, prediction_probability
 
 
 if __name__ == "__main__":
