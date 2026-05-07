@@ -1,9 +1,18 @@
 import streamlit as st
-import pandas as pd
 
-from database.db_config import engine
+from database.db_queries import (
+    get_flight_options,
+    get_airline_options,
+    get_airport_options,
+    get_flight_route_details
+)
+
 from ml.predict import predict_from_details
 
+
+# ------------------------------------------------------------
+# PAGE CONFIG
+# ------------------------------------------------------------
 
 st.set_page_config(
     page_title="FlightInsight",
@@ -13,77 +22,31 @@ st.set_page_config(
 
 
 # ------------------------------------------------------------
-# DATABASE HELPERS
+# CACHED DATA LOADING
 # ------------------------------------------------------------
 
 @st.cache_data(ttl=3600)
-def get_flight_options():
-    query = """
-        SELECT DISTINCT
-            flight_number
-        FROM dim_flight
-        ORDER BY flight_number;
-    """
-    return pd.read_sql(query, engine)
+def load_flight_options():
+    return get_flight_options()
 
 
 @st.cache_data(ttl=3600)
-def get_airline_options():
-    query = """
-        SELECT
-            airline_id,
-            airline_code,
-            airline_name
-        FROM dim_airline
-        ORDER BY airline_code;
-    """
-    return pd.read_sql(query, engine)
+def load_airline_options():
+    return get_airline_options()
 
 
 @st.cache_data(ttl=3600)
-def get_airport_options():
-    query = """
-        SELECT
-            airport_id,
-            airport_code,
-            airport_name,
-            airport_city,
-            airport_country,
-            latitude,
-            longitude
-        FROM dim_airport
-        ORDER BY airport_code;
-    """
-    return pd.read_sql(query, engine)
+def load_airport_options():
+    return get_airport_options()
 
 
 @st.cache_data(ttl=3600)
-def get_flight_route_details(flight_number):
-    query = """
-        SELECT
-            flight_number,
-            flight_type,
-            route_category,
-            route_distance
-        FROM dim_flight
-        WHERE flight_number = %(flight_number)s
-        LIMIT 1;
-    """
-
-    df = pd.read_sql(
-        query,
-        engine,
-        params={"flight_number": flight_number}
-    )
-
-    if df.empty:
-        return None
-
-    return df.iloc[0].to_dict()
+def load_flight_route_details(flight_number):
+    return get_flight_route_details(flight_number)
 
 
 # ------------------------------------------------------------
-# UI
+# MAIN UI
 # ------------------------------------------------------------
 
 st.title("FlightInsight")
@@ -93,10 +56,15 @@ st.write(
     "Enter flight details below to predict whether a flight is likely to be delayed."
 )
 
+
+# ------------------------------------------------------------
+# LOAD DATABASE DATA
+# ------------------------------------------------------------
+
 try:
-    flight_options = get_flight_options()
-    airline_options = get_airline_options()
-    airport_options = get_airport_options()
+    flight_options = load_flight_options()
+    airline_options = load_airline_options()
+    airport_options = load_airport_options()
 
 except Exception as error:
     st.error("Could not load data from the database.")
@@ -158,7 +126,7 @@ with st.form("prediction_form"):
 # ------------------------------------------------------------
 
 if submitted:
-    route_details = get_flight_route_details(flight_number)
+    route_details = load_flight_route_details(flight_number)
 
     if route_details is None:
         st.error("Flight route details were not found in the database.")
@@ -208,7 +176,7 @@ if submitted:
             )
 
         with st.expander("View prediction input features"):
-            st.dataframe(input_df)
+            st.dataframe(input_df, use_container_width=True)
 
     except FileNotFoundError:
         st.error(
@@ -227,10 +195,10 @@ if submitted:
 
 st.sidebar.title("FlightInsight Menu")
 
-st.sidebar.write("Use this app to predict flight delay risk using:")
+st.sidebar.write("This app predicts flight delay risk using:")
 st.sidebar.write("- Historical flight data")
 st.sidebar.write("- Airline and airport data")
-st.sidebar.write("- Route details")
+st.sidebar.write("- Route information")
 st.sidebar.write("- Real weather API data")
 
 st.sidebar.divider()
