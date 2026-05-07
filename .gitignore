@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Datasets
+data/raw/*.csv
+data/processed/*.csv
+data/manual_uploads/*.csv
+
+# ML models
+*.pkl
+ml/models/*.pkl
+
+# VS Code settings
+.vscode/
