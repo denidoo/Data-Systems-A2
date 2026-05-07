@@ -103,10 +103,14 @@ def transform(raw_df):
     ])
 
     date_col = get_first_existing_column(df, [
-        "fl_date",
-        "date",
-        "flight_date"
+    "fl_date",
+    "date",
+    "flight_date"
     ])
+
+    has_split_date_columns = all(
+        col in df.columns for col in ["year", "month", "day"]
+    )
 
     origin_col = get_first_existing_column(df, [
         "origin",
@@ -136,22 +140,31 @@ def transform(raw_df):
     ])
 
     required_map = {
-        "date column": date_col,
-        "carrier/airline column": carrier_col,
-        "flight number column": flight_number_col,
-        "origin column": origin_col,
-        "destination column": dest_col,
-        "scheduled departure time column": dep_time_col,
-        "arrival delay column": arr_delay_col,
-        "cancelled column": cancelled_col
+    "carrier/airline column": carrier_col,
+    "flight number column": flight_number_col,
+    "origin column": origin_col,
+    "destination column": dest_col,
+    "scheduled departure time column": dep_time_col,
+    "arrival delay column": arr_delay_col,
+    "cancelled column": cancelled_col
     }
+
+    if date_col is None and not has_split_date_columns:
+        required_map["date column"] = None
 
     missing = [label for label, value in required_map.items() if value is None]
 
     if missing:
         raise ValueError(f"Missing required columns in CSV: {missing}")
 
-    df["fl_date"] = pd.to_datetime(df[date_col], errors="coerce")
+    if date_col:
+        df["fl_date"] = pd.to_datetime(df[date_col], errors="coerce")
+    else:
+        df["fl_date"] = pd.to_datetime(
+            df[["year", "month", "day"]],
+            errors="coerce"
+        )
+
     df = df.dropna(subset=["fl_date"])
 
     df["airline_code"] = df[carrier_col].astype(str).str.strip().str.upper()
