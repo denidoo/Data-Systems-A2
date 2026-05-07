@@ -36,7 +36,7 @@ def extract():
             "Place flights.csv inside data/raw/."
         )
 
-    flights = pd.read_csv(RAW_FLIGHTS_PATH, low_memory=False)
+    flights = pd.read_csv(RAW_FLIGHTS_PATH, low_memory=False, nrows=100000)
     print(f"Main flight file loaded: {len(flights)} rows")
 
     if MANUAL_FLIGHTS_PATH.exists():
