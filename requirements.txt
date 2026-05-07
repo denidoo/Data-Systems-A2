@@ -4,6 +4,7 @@ numpy
 plotly
 scikit-learn
 sqlalchemy
-psycopg2-binarys
+psycopg2-binary
 requests
 joblib
+python-dotenv
