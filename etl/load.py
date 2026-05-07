@@ -1,6 +1,6 @@
 from sqlalchemy import text
 
-from db_config import engine
+from database.db_config import engine
 
 
 def clear_database():

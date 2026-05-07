@@ -4,7 +4,7 @@ import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
 
-from db_config import engine
+from database.db_config import engine
 
 
 st.set_page_config(

@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
-from db_config import engine
+from database.db_config import engine
 
 
 st.set_page_config(
