@@ -417,19 +417,28 @@ def predict_delay(input_df):
 def predict_from_details(flight_number, flight_date=None):
     flight_record, historical_df = find_flight_record(flight_number, flight_date)
 
-    full_date = flight_record.get("full_date", pd.NaT)
-
-    if pd.notna(full_date):
-        day_of_week = full_date.dayofweek
+    if flight_date is not None:
+        selected_date = pd.to_datetime(flight_date, errors="coerce")
     else:
+        selected_date = flight_record.get("full_date", pd.NaT)
+
+    if pd.notna(selected_date):
+        day = selected_date.day
+        month = selected_date.month
+        year = selected_date.year
+        day_of_week = selected_date.dayofweek
+    else:
+        day = flight_record.get("day", 1)
+        month = flight_record.get("month", 1)
+        year = flight_record.get("year", 2024)
         day_of_week = 0
 
     input_data = {
         "flight_number": flight_record.get("flight_number", flight_number),
 
-        "day": flight_record.get("day", 1),
-        "month": flight_record.get("month", 1),
-        "year": flight_record.get("year", 2024),
+        "day": day,
+        "month": month,
+        "year": year,
         "day_of_week": day_of_week,
 
         "hour": flight_record.get("hour", 12),
