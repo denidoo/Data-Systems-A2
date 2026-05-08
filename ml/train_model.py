@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.neural_network import MLPClassifier
 
 from ml.feature_engineering import build_training_dataset, prepare_features, get_feature_columns
 
@@ -78,6 +79,18 @@ def get_models():
             n_estimators=200,
             learning_rate=0.05,
             max_depth=3,
+            random_state=42
+        ),
+
+        "MLP Neural Network": MLPClassifier(
+            hidden_layer_sizes=(64, 32),
+            activation="relu",
+            solver="adam",
+            alpha=0.001,
+            learning_rate_init=0.001,
+            max_iter=500,
+            early_stopping=True,
+            validation_fraction=0.2,
             random_state=42
         ),
     }
