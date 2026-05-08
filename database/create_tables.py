@@ -77,6 +77,13 @@ CREATE TABLE dim_delay_cause (
     is_controllable BOOLEAN
 );
 
+CREATE TABLE Dim_API_Snapshot (
+    api_snapshot_id SERIAL PRIMARY KEY,
+    api_provider VARCHAR(50),
+    snapshot_timestamp TIMESTAMP,
+    request_type VARCHAR(50)
+);
+
 CREATE TABLE fact_flightperformance (
     flight_performance_id SERIAL PRIMARY KEY,
     date_id INTEGER REFERENCES dim_date(date_id),
@@ -96,6 +103,38 @@ CREATE TABLE fact_flightperformance (
     scheduled_arrival_datetime TIMESTAMP,
     actual_arrival_datetime TIMESTAMP,
     delay_status VARCHAR(20)
+);
+
+CREATE TABLE Fact_LiveFlightStatus (
+    live_status_id SERIAL PRIMARY KEY,
+
+    api_snapshot_id INT REFERENCES Dim_API_Snapshot(api_snapshot_id),
+
+    flight_id INT REFERENCES Dim_Flight(flight_id),
+    origin_airport_id INT REFERENCES Dim_Airport(airport_id),
+    destination_airport_id INT REFERENCES Dim_Airport(airport_id),
+    airline_id INT REFERENCES Dim_Airline(airline_id),
+    date_id INT REFERENCES Dim_Date(date_id),
+    time_id INT REFERENCES Dim_Time(time_id),
+
+    live_flight_status VARCHAR(50),
+
+    departure_delay_minutes_live FLOAT,
+    arrival_delay_minutes_live FLOAT,
+
+    origin_live_departures_count INT,
+    origin_live_arrivals_count INT,
+    origin_delayed_departures_count INT,
+    origin_delayed_arrivals_count INT,
+    origin_avg_departure_delay FLOAT,
+    origin_avg_arrival_delay FLOAT,
+
+    destination_live_departures_count INT,
+    destination_live_arrivals_count INT,
+    destination_delayed_departures_count INT,
+    destination_delayed_arrivals_count INT,
+    destination_avg_departure_delay FLOAT,
+    destination_avg_arrival_delay FLOAT
 );
 """
 

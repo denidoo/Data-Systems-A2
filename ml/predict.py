@@ -2,6 +2,11 @@ import joblib
 import pandas as pd
 from pathlib import Path
 
+from api.aviation_stack_api import (
+    get_live_flight_status,
+    get_airport_live_flight_summary
+)
+
 
 PROCESSED_DIR = Path("data/processed")
 MODEL_PATH = Path("ml/models/best_flight_delay_model.pkl")
@@ -93,7 +98,10 @@ def get_historical_rate(df, column_name, value, default_rate):
 
 
 def get_route_delay_rate(df, origin_airport_code, destination_airport_code, default_rate):
-    if "origin_airport_code" not in df.columns or "destination_airport_code" not in df.columns:
+    if "origin_airport_code" not in df.columns:
+        return default_rate
+
+    if "destination_airport_code" not in df.columns:
         return default_rate
 
     matching_rows = df[
@@ -119,22 +127,24 @@ def find_flight_record(flight_number, flight_date=None):
         flight_date = pd.to_datetime(flight_date, errors="coerce")
 
         if pd.notna(flight_date):
-            same_month_day = (
+            exact_date_matches = flight_matches[flight_matches["full_date"] == flight_date]
+
+            same_month_day_matches = flight_matches[
                 (flight_matches["full_date"].dt.month == flight_date.month) &
                 (flight_matches["full_date"].dt.day == flight_date.day)
-            )
-
-            exact_date_matches = flight_matches[flight_matches["full_date"] == flight_date]
+            ]
 
             if not exact_date_matches.empty:
                 flight_matches = exact_date_matches
-            elif not flight_matches[same_month_day].empty:
-                flight_matches = flight_matches[same_month_day]
+            elif not same_month_day_matches.empty:
+                flight_matches = same_month_day_matches
 
     if flight_matches.empty:
+        available_flights = df["flight_number"].dropna().astype(str).head(20).to_list()
+
         raise ValueError(
-            f"No matching flight found for flight number {flight_number}. "
-            "Add this flight to your processed data first, or update predict_from_details() manually."
+            f"No matching flight found for flight number {flight_number}.\n"
+            f"Example available flight numbers: {available_flights}"
         )
 
     return flight_matches.iloc[0], df
@@ -147,6 +157,7 @@ def add_engineered_features(input_df, historical_df):
         "day": 1,
         "month": 1,
         "year": 2024,
+        "day_of_week": 0,
         "hour": 12,
         "minute": 0,
         "temperature": 20,
@@ -154,7 +165,6 @@ def add_engineered_features(input_df, historical_df):
         "visibility": 10,
         "route_distance": 0,
         "seating_capacity": 150,
-        "day_of_week": 0,
     }
 
     for col, default in numeric_defaults.items():
@@ -172,6 +182,7 @@ def add_engineered_features(input_df, historical_df):
         "flight_type": "Unknown",
         "route_category": "Unknown",
         "aircraft_category": "Unknown",
+        "live_flight_status": "Unknown",
     }
 
     for col, default in categorical_defaults.items():
@@ -180,6 +191,7 @@ def add_engineered_features(input_df, historical_df):
 
         input_df[col] = input_df[col].fillna(default).astype(str)
 
+    # Basic date/time features
     input_df["is_weekend"] = input_df["day_of_week"].isin([5, 6]).astype(int)
 
     input_df["is_night_flight"] = input_df["hour"].between(0, 5).astype(int)
@@ -188,10 +200,12 @@ def add_engineered_features(input_df, historical_df):
     input_df["is_evening"] = input_df["hour"].between(18, 23).astype(int)
     input_df["is_peak_hour"] = input_df["hour"].isin([7, 8, 9, 16, 17, 18, 19]).astype(int)
 
+    # Seasonal features
     input_df["is_winter"] = input_df["month"].isin([12, 1, 2]).astype(int)
     input_df["is_summer"] = input_df["month"].isin([6, 7, 8]).astype(int)
     input_df["is_holiday_season"] = input_df["month"].isin([12, 1]).astype(int)
 
+    # Weather features
     input_df["low_visibility"] = (input_df["visibility"] < 5).astype(int)
     input_df["high_wind"] = (input_df["wind_speed"] > 20).astype(int)
 
@@ -199,30 +213,57 @@ def add_engineered_features(input_df, historical_df):
         ["Rain", "Storm", "Snow", "Fog", "Thunderstorm"]
     ).astype(int)
 
+    # Route distance features
     input_df["short_route"] = (input_df["route_distance"] < 500).astype(int)
     input_df["medium_route"] = input_df["route_distance"].between(500, 1500).astype(int)
     input_df["long_route"] = (input_df["route_distance"] > 1500).astype(int)
 
+    # Historical delay-rate features
     default_delay_rate = historical_df["target_delayed"].mean()
 
     input_df["airline_delay_rate"] = input_df["airline_code"].apply(
-        lambda x: get_historical_rate(historical_df, "airline_code", x, default_delay_rate)
+        lambda x: get_historical_rate(
+            historical_df,
+            "airline_code",
+            x,
+            default_delay_rate
+        )
     )
 
     input_df["origin_delay_rate"] = input_df["origin_airport_code"].apply(
-        lambda x: get_historical_rate(historical_df, "origin_airport_code", x, default_delay_rate)
+        lambda x: get_historical_rate(
+            historical_df,
+            "origin_airport_code",
+            x,
+            default_delay_rate
+        )
     )
 
     input_df["destination_delay_rate"] = input_df["destination_airport_code"].apply(
-        lambda x: get_historical_rate(historical_df, "destination_airport_code", x, default_delay_rate)
+        lambda x: get_historical_rate(
+            historical_df,
+            "destination_airport_code",
+            x,
+            default_delay_rate
+        )
     )
 
     input_df["aircraft_delay_rate"] = input_df["aircraft_category"].apply(
-        lambda x: get_historical_rate(historical_df, "aircraft_category", x, default_delay_rate)
+        lambda x: get_historical_rate(
+            historical_df,
+            "aircraft_category",
+            x,
+            default_delay_rate
+        )
     )
 
     input_df["weather_delay_rate"] = input_df["weather_type"].apply(
-        lambda x: get_historical_rate(historical_df, "weather_type", x, default_delay_rate)
+        lambda x: get_historical_rate(
+            historical_df,
+            "weather_type",
+            x,
+            default_delay_rate
+        )
     )
 
     input_df["route_delay_rate"] = input_df.apply(
@@ -234,6 +275,39 @@ def add_engineered_features(input_df, historical_df):
         ),
         axis=1
     )
+
+    # Aviationstack live API features
+    origin_code = input_df["origin_airport_code"].iloc[0]
+    destination_code = input_df["destination_airport_code"].iloc[0]
+
+    origin_summary = get_airport_live_flight_summary(origin_code)
+    destination_summary = get_airport_live_flight_summary(destination_code)
+
+    input_df["origin_live_departures_count"] = origin_summary["airport_live_departures_count"]
+    input_df["origin_live_arrivals_count"] = origin_summary["airport_live_arrivals_count"]
+    input_df["origin_delayed_departures_count"] = origin_summary["airport_delayed_departures_count"]
+    input_df["origin_delayed_arrivals_count"] = origin_summary["airport_delayed_arrivals_count"]
+    input_df["origin_avg_departure_delay"] = origin_summary["airport_avg_departure_delay"]
+    input_df["origin_avg_arrival_delay"] = origin_summary["airport_avg_arrival_delay"]
+
+    input_df["destination_live_departures_count"] = destination_summary["airport_live_departures_count"]
+    input_df["destination_live_arrivals_count"] = destination_summary["airport_live_arrivals_count"]
+    input_df["destination_delayed_departures_count"] = destination_summary["airport_delayed_departures_count"]
+    input_df["destination_delayed_arrivals_count"] = destination_summary["airport_delayed_arrivals_count"]
+    input_df["destination_avg_departure_delay"] = destination_summary["airport_avg_departure_delay"]
+    input_df["destination_avg_arrival_delay"] = destination_summary["airport_avg_arrival_delay"]
+
+    if "flight_number" in input_df.columns:
+        flight_number = input_df["flight_number"].iloc[0]
+        live_status = get_live_flight_status(flight_number)
+
+        input_df["live_flight_status"] = live_status["live_flight_status"]
+        input_df["departure_delay_minutes_live"] = live_status["departure_delay_minutes_live"]
+        input_df["arrival_delay_minutes_live"] = live_status["arrival_delay_minutes_live"]
+    else:
+        input_df["live_flight_status"] = "Unknown"
+        input_df["departure_delay_minutes_live"] = 0
+        input_df["arrival_delay_minutes_live"] = 0
 
     return input_df
 
@@ -278,6 +352,23 @@ def get_model_feature_columns():
         "route_delay_rate",
         "aircraft_delay_rate",
         "weather_delay_rate",
+
+        "origin_live_departures_count",
+        "origin_live_arrivals_count",
+        "origin_delayed_departures_count",
+        "origin_delayed_arrivals_count",
+        "origin_avg_departure_delay",
+        "origin_avg_arrival_delay",
+
+        "destination_live_departures_count",
+        "destination_live_arrivals_count",
+        "destination_delayed_departures_count",
+        "destination_delayed_arrivals_count",
+        "destination_avg_departure_delay",
+        "destination_avg_arrival_delay",
+
+        "departure_delay_minutes_live",
+        "arrival_delay_minutes_live",
     ]
 
     categorical_features = [
@@ -289,6 +380,7 @@ def get_model_feature_columns():
         "flight_type",
         "route_category",
         "aircraft_category",
+        "live_flight_status",
     ]
 
     return numeric_features + categorical_features
@@ -313,27 +405,32 @@ def predict_delay(input_df):
     else:
         delayed_probability = None
 
-    if prediction == 1:
-        status = "Delayed"
-    else:
-        status = "Not Delayed"
+    status = "Delayed" if prediction == 1 else "Not Delayed"
 
     return {
         "prediction": int(prediction),
         "status": status,
-        "delayed_probability": delayed_probability
+        "delayed_probability": delayed_probability,
     }
 
 
 def predict_from_details(flight_number, flight_date=None):
     flight_record, historical_df = find_flight_record(flight_number, flight_date)
 
+    full_date = flight_record.get("full_date", pd.NaT)
+
+    if pd.notna(full_date):
+        day_of_week = full_date.dayofweek
+    else:
+        day_of_week = 0
+
     input_data = {
+        "flight_number": flight_record.get("flight_number", flight_number),
+
         "day": flight_record.get("day", 1),
         "month": flight_record.get("month", 1),
         "year": flight_record.get("year", 2024),
-        "day_of_week": flight_record.get("full_date", pd.Timestamp("2024-01-01")).dayofweek
-        if pd.notna(flight_record.get("full_date", pd.NaT)) else 0,
+        "day_of_week": day_of_week,
 
         "hour": flight_record.get("hour", 12),
         "minute": flight_record.get("minute", 0),
@@ -367,10 +464,12 @@ def predict_from_details(flight_number, flight_date=None):
 if __name__ == "__main__":
     historical_df = build_full_dataset_for_lookup()
 
-    print("\nAvailable flight numbers:")
-    print(historical_df["flight_number"].dropna().astype(str).head(20).to_list())
+    available_flights = historical_df["flight_number"].dropna().astype(str).head(20).to_list()
 
-    test_flight_number = historical_df["flight_number"].dropna().astype(str).iloc[0]
+    print("\nAvailable flight numbers:")
+    print(available_flights)
+
+    test_flight_number = available_flights[0]
     test_flight_date = None
 
     print(f"\nTesting prediction for flight number: {test_flight_number}")

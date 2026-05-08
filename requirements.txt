@@ -1,10 +1,10 @@
 streamlit
-pandas
-numpy
-plotly
-scikit-learn
+python-dotenv
+requests
 sqlalchemy
 psycopg2-binary
-requests
+scikit-learn
+pandas
 joblib
-python-dotenv
+xgboost
+imbalanced-learn

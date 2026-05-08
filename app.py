@@ -1,18 +1,8 @@
 import streamlit as st
+import pandas as pd
 
-from database.db_queries import (
-    get_flight_options,
-    get_airline_options,
-    get_airport_options,
-    get_flight_route_details
-)
+from ml.predict import predict_from_details, build_full_dataset_for_lookup
 
-from ml.predict import predict_from_details
-
-
-# ------------------------------------------------------------
-# PAGE CONFIG
-# ------------------------------------------------------------
 
 st.set_page_config(
     page_title="FlightInsight",
@@ -21,188 +11,214 @@ st.set_page_config(
 )
 
 
-# ------------------------------------------------------------
-# CACHED DATA LOADING
-# ------------------------------------------------------------
-
-@st.cache_data(ttl=3600)
-def load_flight_options():
-    return get_flight_options()
-
-
-@st.cache_data(ttl=3600)
-def load_airline_options():
-    return get_airline_options()
-
-
-@st.cache_data(ttl=3600)
-def load_airport_options():
-    return get_airport_options()
-
-
-@st.cache_data(ttl=3600)
-def load_flight_route_details(flight_number):
-    return get_flight_route_details(flight_number)
-
-
-# ------------------------------------------------------------
-# MAIN UI
-# ------------------------------------------------------------
-
 st.title("FlightInsight")
 st.subheader("Flight Delay Prediction System")
 
-st.write(
-    "Enter flight details below to predict whether a flight is likely to be delayed."
-)
 
+@st.cache_data
+def load_available_flights():
+    df = build_full_dataset_for_lookup()
 
-# ------------------------------------------------------------
-# LOAD DATABASE DATA
-# ------------------------------------------------------------
+    df["flight_number"] = df["flight_number"].astype(str)
+
+    available_flights = (
+        df[[
+            "flight_number",
+            "airline_code",
+            "origin_airport_code",
+            "destination_airport_code",
+            "full_date"
+        ]]
+        .dropna(subset=["flight_number"])
+        .drop_duplicates()
+        .sort_values("flight_number")
+    )
+
+    return available_flights
+
 
 try:
-    flight_options = load_flight_options()
-    airline_options = load_airline_options()
-    airport_options = load_airport_options()
+    available_flights = load_available_flights()
 
-except Exception as error:
-    st.error("Could not load data from the database.")
-    st.exception(error)
-    st.stop()
+    st.sidebar.header("Prediction Input")
 
+    flight_options = available_flights["flight_number"].unique().tolist()
 
-if flight_options.empty:
-    st.warning("No flights found. Run the ETL pipeline first.")
-    st.stop()
+    selected_flight = st.sidebar.selectbox(
+        "Select Flight Number",
+        flight_options
+    )
 
-if airline_options.empty:
-    st.warning("No airlines found. Run the ETL pipeline first.")
-    st.stop()
+    matching_dates = available_flights[
+        available_flights["flight_number"] == selected_flight
+    ]["full_date"].dropna().astype(str).unique().tolist()
 
-if airport_options.empty:
-    st.warning("No airports found. Run the ETL pipeline first.")
-    st.stop()
+    selected_date = None
 
-
-# ------------------------------------------------------------
-# INPUT FORM
-# ------------------------------------------------------------
-
-with st.form("prediction_form"):
-    col1, col2 = st.columns(2)
-
-    with col1:
-        flight_number = st.selectbox(
-            "Flight Number",
-            flight_options["flight_number"].tolist()
+    if matching_dates:
+        selected_date = st.sidebar.selectbox(
+            "Select Flight Date",
+            ["Use any matching record"] + matching_dates
         )
 
-        flight_date = st.date_input("Departure Date")
+        if selected_date == "Use any matching record":
+            selected_date = None
 
-        scheduled_time = st.time_input("Scheduled Departure Time")
+    predict_button = st.sidebar.button("Predict Delay")
 
-    with col2:
-        airline_code = st.selectbox(
-            "Airline",
-            airline_options["airline_code"].tolist()
-        )
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Prediction uses historical data plus live Aviationstack API data.")
 
-        origin_airport_code = st.selectbox(
-            "Origin Airport",
-            airport_options["airport_code"].tolist()
-        )
-
-        destination_airport_code = st.selectbox(
-            "Destination Airport",
-            airport_options["airport_code"].tolist()
-        )
-
-    submitted = st.form_submit_button("Predict Delay")
-
-
-# ------------------------------------------------------------
-# PREDICTION
-# ------------------------------------------------------------
-
-if submitted:
-    route_details = load_flight_route_details(flight_number)
-
-    if route_details is None:
-        st.error("Flight route details were not found in the database.")
-        st.stop()
-
-    origin_airport_df = airport_options[
-        airport_options["airport_code"] == origin_airport_code
-    ]
-
-    if origin_airport_df.empty:
-        st.error("Origin airport details were not found.")
-        st.stop()
-
-    origin_airport = origin_airport_df.iloc[0]
-
-    latitude = origin_airport.get("latitude", None)
-    longitude = origin_airport.get("longitude", None)
-
-    try:
-        result, input_df = predict_from_details(
-            flight_date=flight_date,
-            scheduled_hour=scheduled_time.hour,
-            scheduled_minute=scheduled_time.minute,
-            airline_code=airline_code,
-            origin_airport_code=origin_airport_code,
-            destination_airport_code=destination_airport_code,
-            flight_type=route_details.get("flight_type", "Domestic"),
-            route_category=route_details.get("route_category", "Unknown"),
-            route_distance=route_details.get("route_distance", 0),
-            aircraft_category="Unknown",
-            seating_capacity=0,
-            latitude=latitude,
-            longitude=longitude
-        )
-
-        st.divider()
-
-        if result["prediction_label"] == "Delayed":
-            st.error("Prediction: Flight is likely to be delayed")
-        else:
-            st.success("Prediction: Flight is likely to be on time")
-
-        if result["delay_probability"] is not None:
-            st.metric(
-                label="Delay Probability",
-                value=f"{result['delay_probability']:.2%}"
+    if predict_button:
+        with st.spinner("Running prediction and fetching live aviation data..."):
+            result, input_df = predict_from_details(
+                flight_number=selected_flight,
+                flight_date=selected_date
             )
 
-        with st.expander("View prediction input features"):
-            st.dataframe(input_df, use_container_width=True)
+        st.markdown("## Prediction Result")
 
-    except FileNotFoundError:
-        st.error(
-            "Model file not found. Run the model training script first:\n\n"
-            "`python -m ml.train_model`"
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("Predicted Status", result["status"])
+
+        with col2:
+            if result["delayed_probability"] is not None:
+                st.metric(
+                    "Delay Probability",
+                    f"{result['delayed_probability']:.2%}"
+                )
+            else:
+                st.metric("Delay Probability", "Unavailable")
+
+        with col3:
+            st.metric(
+                "Live Flight Status",
+                input_df["live_flight_status"].iloc[0]
+            )
+
+        st.markdown("## Flight Details")
+
+        details_col1, details_col2, details_col3 = st.columns(3)
+
+        with details_col1:
+            st.write("**Flight Number:**", selected_flight)
+            st.write("**Airline:**", input_df["airline_code"].iloc[0])
+            st.write("**Flight Type:**", input_df["flight_type"].iloc[0])
+
+        with details_col2:
+            st.write("**Origin Airport:**", input_df["origin_airport_code"].iloc[0])
+            st.write("**Destination Airport:**", input_df["destination_airport_code"].iloc[0])
+            st.write("**Route Category:**", input_df["route_category"].iloc[0])
+
+        with details_col3:
+            st.write("**Scheduled Hour:**", int(input_df["hour"].iloc[0]))
+            st.write("**Weather Type:**", input_df["weather_type"].iloc[0])
+            st.write("**Aircraft Category:**", input_df["aircraft_category"].iloc[0])
+
+        st.markdown("## Live Aviationstack Data")
+
+        live_col1, live_col2 = st.columns(2)
+
+        with live_col1:
+            st.markdown("### Flight-Level Live Data")
+            st.metric(
+                "Live Departure Delay",
+                f"{input_df['departure_delay_minutes_live'].iloc[0]:.0f} min"
+            )
+            st.metric(
+                "Live Arrival Delay",
+                f"{input_df['arrival_delay_minutes_live'].iloc[0]:.0f} min"
+            )
+
+        with live_col2:
+            st.markdown("### Current Flight Status")
+            st.write("**Status:**", input_df["live_flight_status"].iloc[0])
+
+        st.markdown("## Origin Airport Live Activity")
+
+        origin_col1, origin_col2, origin_col3 = st.columns(3)
+
+        with origin_col1:
+            st.metric(
+                "Live Departures",
+                int(input_df["origin_live_departures_count"].iloc[0])
+            )
+            st.metric(
+                "Live Arrivals",
+                int(input_df["origin_live_arrivals_count"].iloc[0])
+            )
+
+        with origin_col2:
+            st.metric(
+                "Delayed Departures",
+                int(input_df["origin_delayed_departures_count"].iloc[0])
+            )
+            st.metric(
+                "Delayed Arrivals",
+                int(input_df["origin_delayed_arrivals_count"].iloc[0])
+            )
+
+        with origin_col3:
+            st.metric(
+                "Avg Departure Delay",
+                f"{input_df['origin_avg_departure_delay'].iloc[0]:.1f} min"
+            )
+            st.metric(
+                "Avg Arrival Delay",
+                f"{input_df['origin_avg_arrival_delay'].iloc[0]:.1f} min"
+            )
+
+        st.markdown("## Destination Airport Live Activity")
+
+        destination_col1, destination_col2, destination_col3 = st.columns(3)
+
+        with destination_col1:
+            st.metric(
+                "Live Departures",
+                int(input_df["destination_live_departures_count"].iloc[0])
+            )
+            st.metric(
+                "Live Arrivals",
+                int(input_df["destination_live_arrivals_count"].iloc[0])
+            )
+
+        with destination_col2:
+            st.metric(
+                "Delayed Departures",
+                int(input_df["destination_delayed_departures_count"].iloc[0])
+            )
+            st.metric(
+                "Delayed Arrivals",
+                int(input_df["destination_delayed_arrivals_count"].iloc[0])
+            )
+
+        with destination_col3:
+            st.metric(
+                "Avg Departure Delay",
+                f"{input_df['destination_avg_departure_delay'].iloc[0]:.1f} min"
+            )
+            st.metric(
+                "Avg Arrival Delay",
+                f"{input_df['destination_avg_arrival_delay'].iloc[0]:.1f} min"
+            )
+
+        st.markdown("## Model Input Features")
+
+        with st.expander("Show full prediction input data"):
+            st.dataframe(input_df.T)
+
+    else:
+        st.info("Select a flight number from the sidebar, then click Predict Delay.")
+
+        st.markdown("## Available Flight Records")
+
+        st.dataframe(
+            available_flights.head(50),
+            use_container_width=True
         )
 
-    except Exception as error:
-        st.error("Prediction failed.")
-        st.exception(error)
-
-
-# ------------------------------------------------------------
-# SIDEBAR
-# ------------------------------------------------------------
-
-st.sidebar.title("FlightInsight Menu")
-
-st.sidebar.write("This app predicts flight delay risk using:")
-st.sidebar.write("- Historical flight data")
-st.sidebar.write("- Airline and airport data")
-st.sidebar.write("- Route information")
-st.sidebar.write("- Real weather API data")
-
-st.sidebar.divider()
-
-if st.sidebar.button("Refresh Cached Data"):
-    st.cache_data.clear()
-    st.rerun()
+except Exception as e:
+    st.error("An error occurred while running the app.")
+    st.exception(e)

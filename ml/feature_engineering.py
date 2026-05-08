@@ -121,6 +121,25 @@ def build_training_dataset():
         "weather_type"
     )["target_delayed"].transform("mean")
 
+    # Real-time Aviationstack API placeholder features
+    df["origin_live_departures_count"] = 0
+    df["origin_live_arrivals_count"] = 0
+    df["origin_delayed_departures_count"] = 0
+    df["origin_delayed_arrivals_count"] = 0
+    df["origin_avg_departure_delay"] = 0
+    df["origin_avg_arrival_delay"] = 0
+
+    df["destination_live_departures_count"] = 0
+    df["destination_live_arrivals_count"] = 0
+    df["destination_delayed_departures_count"] = 0
+    df["destination_delayed_arrivals_count"] = 0
+    df["destination_avg_departure_delay"] = 0
+    df["destination_avg_arrival_delay"] = 0
+
+    df["departure_delay_minutes_live"] = 0
+    df["arrival_delay_minutes_live"] = 0
+    df["live_flight_status"] = "Unknown"
+
     return df
 
 
@@ -164,6 +183,23 @@ def get_feature_columns():
         "route_delay_rate",
         "aircraft_delay_rate",
         "weather_delay_rate",
+
+        "origin_live_departures_count",
+        "origin_live_arrivals_count",
+        "origin_delayed_departures_count",
+        "origin_delayed_arrivals_count",
+        "origin_avg_departure_delay",
+        "origin_avg_arrival_delay",
+
+        "destination_live_departures_count",
+        "destination_live_arrivals_count",
+        "destination_delayed_departures_count",
+        "destination_delayed_arrivals_count",
+        "destination_avg_departure_delay",
+        "destination_avg_arrival_delay",
+
+        "departure_delay_minutes_live",
+        "arrival_delay_minutes_live",
     ]
 
     categorical_features = [
@@ -175,6 +211,7 @@ def get_feature_columns():
         "flight_type",
         "route_category",
         "aircraft_category",
+        "live_flight_status",
     ]
 
     return numeric_features, categorical_features
