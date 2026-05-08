@@ -49,20 +49,9 @@ try:
         flight_options
     )
 
-    matching_dates = available_flights[
-        available_flights["flight_number"] == selected_flight
-    ]["full_date"].dropna().astype(str).unique().tolist()
-
-    selected_date = None
-
-    if matching_dates:
-        selected_date = st.sidebar.selectbox(
-            "Select Flight Date",
-            ["Use any matching record"] + matching_dates
-        )
-
-        if selected_date == "Use any matching record":
-            selected_date = None
+    selected_date = st.sidebar.date_input(
+        "Enter Flight Date"
+    )
 
     predict_button = st.sidebar.button("Predict Delay")
 
