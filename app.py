@@ -93,6 +93,7 @@ try:
 
         with details_col1:
             st.write("**Flight Number:**", selected_flight)
+            st.write("**Selected Flight Date:**", selected_date)
             st.write("**Airline:**", input_df["airline_code"].iloc[0])
             st.write("**Flight Type:**", input_df["flight_type"].iloc[0])
 
