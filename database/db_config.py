@@ -10,7 +10,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is missing.")
 
+
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True
 )
+
+
+def get_connection():
+    return engine.connect()

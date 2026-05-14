@@ -22,13 +22,15 @@ def load_available_flights():
     df["flight_number"] = df["flight_number"].astype(str)
 
     available_flights = (
-        df[[
-            "flight_number",
-            "airline_code",
-            "origin_airport_code",
-            "destination_airport_code",
-            "full_date"
-        ]]
+        df[
+            [
+                "flight_number",
+                "airline_code",
+                "origin_airport_code",
+                "destination_airport_code",
+                "full_date",
+            ]
+        ]
         .dropna(subset=["flight_number"])
         .drop_duplicates()
         .sort_values("flight_number")
@@ -40,6 +42,9 @@ def load_available_flights():
 try:
     available_flights = load_available_flights()
 
+    # -----------------------------
+    # Sidebar prediction input
+    # -----------------------------
     st.sidebar.header("Prediction Input")
 
     flight_options = available_flights["flight_number"].unique().tolist()
@@ -56,18 +61,23 @@ try:
     predict_button = st.sidebar.button("Predict Delay")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("Prediction uses historical data plus live Aviationstack API data.")
+    st.sidebar.caption(
+        "Prediction uses historical flight data and available live API features in the backend."
+    )
 
+    # -----------------------------
+    # Main prediction section
+    # -----------------------------
     if predict_button:
-        with st.spinner("Running prediction and fetching live aviation data..."):
+        with st.spinner("Running prediction..."):
             result, input_df = predict_from_details(
                 flight_number=selected_flight,
-                flight_date=selected_date
+                flight_date=selected_date,
             )
 
         st.markdown("## Prediction Result")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
 
         with col1:
             st.metric("Predicted Status", result["status"])
@@ -76,17 +86,14 @@ try:
             if result["delayed_probability"] is not None:
                 st.metric(
                     "Delay Probability",
-                    f"{result['delayed_probability']:.2%}"
+                    f"{result['delayed_probability']:.2%}",
                 )
             else:
                 st.metric("Delay Probability", "Unavailable")
 
-        with col3:
-            st.metric(
-                "Live Flight Status",
-                input_df["live_flight_status"].iloc[0]
-            )
-
+        # -----------------------------
+        # Flight details
+        # -----------------------------
         st.markdown("## Flight Details")
 
         details_col1, details_col2, details_col3 = st.columns(3)
@@ -99,7 +106,10 @@ try:
 
         with details_col2:
             st.write("**Origin Airport:**", input_df["origin_airport_code"].iloc[0])
-            st.write("**Destination Airport:**", input_df["destination_airport_code"].iloc[0])
+            st.write(
+                "**Destination Airport:**",
+                input_df["destination_airport_code"].iloc[0],
+            )
             st.write("**Route Category:**", input_df["route_category"].iloc[0])
 
         with details_col3:
@@ -107,96 +117,28 @@ try:
             st.write("**Weather Type:**", input_df["weather_type"].iloc[0])
             st.write("**Aircraft Category:**", input_df["aircraft_category"].iloc[0])
 
-        st.markdown("## Live Aviationstack Data")
+        # -----------------------------
+        # Historical trends
+        # -----------------------------
+        st.markdown("## Historical Trends")
 
-        live_col1, live_col2 = st.columns(2)
+        selected_records = available_flights[
+            available_flights["flight_number"] == str(selected_flight)
+        ]
 
-        with live_col1:
-            st.markdown("### Flight-Level Live Data")
-            st.metric(
-                "Live Departure Delay",
-                f"{input_df['departure_delay_minutes_live'].iloc[0]:.0f} min"
-            )
-            st.metric(
-                "Live Arrival Delay",
-                f"{input_df['arrival_delay_minutes_live'].iloc[0]:.0f} min"
-            )
+        st.write(
+            "Matching historical records for this flight number in the database:"
+        )
 
-        with live_col2:
-            st.markdown("### Current Flight Status")
-            st.write("**Status:**", input_df["live_flight_status"].iloc[0])
+        st.dataframe(
+            selected_records,
+            use_container_width=True,
+        )
 
-        st.markdown("## Origin Airport Live Activity")
-
-        origin_col1, origin_col2, origin_col3 = st.columns(3)
-
-        with origin_col1:
-            st.metric(
-                "Live Departures",
-                int(input_df["origin_live_departures_count"].iloc[0])
-            )
-            st.metric(
-                "Live Arrivals",
-                int(input_df["origin_live_arrivals_count"].iloc[0])
-            )
-
-        with origin_col2:
-            st.metric(
-                "Delayed Departures",
-                int(input_df["origin_delayed_departures_count"].iloc[0])
-            )
-            st.metric(
-                "Delayed Arrivals",
-                int(input_df["origin_delayed_arrivals_count"].iloc[0])
-            )
-
-        with origin_col3:
-            st.metric(
-                "Avg Departure Delay",
-                f"{input_df['origin_avg_departure_delay'].iloc[0]:.1f} min"
-            )
-            st.metric(
-                "Avg Arrival Delay",
-                f"{input_df['origin_avg_arrival_delay'].iloc[0]:.1f} min"
-            )
-
-        st.markdown("## Destination Airport Live Activity")
-
-        destination_col1, destination_col2, destination_col3 = st.columns(3)
-
-        with destination_col1:
-            st.metric(
-                "Live Departures",
-                int(input_df["destination_live_departures_count"].iloc[0])
-            )
-            st.metric(
-                "Live Arrivals",
-                int(input_df["destination_live_arrivals_count"].iloc[0])
-            )
-
-        with destination_col2:
-            st.metric(
-                "Delayed Departures",
-                int(input_df["destination_delayed_departures_count"].iloc[0])
-            )
-            st.metric(
-                "Delayed Arrivals",
-                int(input_df["destination_delayed_arrivals_count"].iloc[0])
-            )
-
-        with destination_col3:
-            st.metric(
-                "Avg Departure Delay",
-                f"{input_df['destination_avg_departure_delay'].iloc[0]:.1f} min"
-            )
-            st.metric(
-                "Avg Arrival Delay",
-                f"{input_df['destination_avg_arrival_delay'].iloc[0]:.1f} min"
-            )
-
-        st.markdown("## Model Input Features")
-
-        with st.expander("Show full prediction input data"):
+        # -----------------------------
+        # Optional model input debug section
+        # -----------------------------
+        with st.expander("Show model input features"):
             st.dataframe(input_df.T)
 
     else:
@@ -206,8 +148,9 @@ try:
 
         st.dataframe(
             available_flights.head(50),
-            use_container_width=True
+            use_container_width=True,
         )
+
 
 except Exception as e:
     st.error("An error occurred while running the app.")
