@@ -3,7 +3,10 @@ from database.db_config import engine
 
 
 CREATE_TABLES_SQL = """
+DROP TABLE IF EXISTS fact_liveflightstatus CASCADE;
 DROP TABLE IF EXISTS fact_flightperformance CASCADE;
+
+DROP TABLE IF EXISTS dim_api_snapshot CASCADE;
 DROP TABLE IF EXISTS dim_date CASCADE;
 DROP TABLE IF EXISTS dim_time CASCADE;
 DROP TABLE IF EXISTS dim_airport CASCADE;
@@ -77,7 +80,7 @@ CREATE TABLE dim_delay_cause (
     is_controllable BOOLEAN
 );
 
-CREATE TABLE Dim_API_Snapshot (
+CREATE TABLE dim_api_snapshot (
     api_snapshot_id SERIAL PRIMARY KEY,
     api_provider VARCHAR(50),
     snapshot_timestamp TIMESTAMP,
@@ -105,45 +108,49 @@ CREATE TABLE fact_flightperformance (
     delay_status VARCHAR(20)
 );
 
-CREATE TABLE Fact_LiveFlightStatus (
+CREATE TABLE fact_liveflightstatus (
     live_status_id SERIAL PRIMARY KEY,
 
-    api_snapshot_id INT REFERENCES Dim_API_Snapshot(api_snapshot_id),
+    api_snapshot_id INTEGER REFERENCES dim_api_snapshot(api_snapshot_id),
 
-    flight_id INT REFERENCES Dim_Flight(flight_id),
-    origin_airport_id INT REFERENCES Dim_Airport(airport_id),
-    destination_airport_id INT REFERENCES Dim_Airport(airport_id),
-    airline_id INT REFERENCES Dim_Airline(airline_id),
-    date_id INT REFERENCES Dim_Date(date_id),
-    time_id INT REFERENCES Dim_Time(time_id),
+    flight_id INTEGER REFERENCES dim_flight(flight_id),
+    origin_airport_id INTEGER REFERENCES dim_airport(airport_id),
+    destination_airport_id INTEGER REFERENCES dim_airport(airport_id),
+    airline_id INTEGER REFERENCES dim_airline(airline_id),
+    date_id INTEGER REFERENCES dim_date(date_id),
+    time_id INTEGER REFERENCES dim_time(time_id),
 
     live_flight_status VARCHAR(50),
 
     departure_delay_minutes_live FLOAT,
     arrival_delay_minutes_live FLOAT,
 
-    origin_live_departures_count INT,
-    origin_live_arrivals_count INT,
-    origin_delayed_departures_count INT,
-    origin_delayed_arrivals_count INT,
+    origin_live_departures_count INTEGER,
+    origin_live_arrivals_count INTEGER,
+    origin_delayed_departures_count INTEGER,
+    origin_delayed_arrivals_count INTEGER,
     origin_avg_departure_delay FLOAT,
     origin_avg_arrival_delay FLOAT,
 
-    destination_live_departures_count INT,
-    destination_live_arrivals_count INT,
-    destination_delayed_departures_count INT,
-    destination_delayed_arrivals_count INT,
+    destination_live_departures_count INTEGER,
+    destination_live_arrivals_count INTEGER,
+    destination_delayed_departures_count INTEGER,
+    destination_delayed_arrivals_count INTEGER,
     destination_avg_departure_delay FLOAT,
     destination_avg_arrival_delay FLOAT
 );
 """
 
 
-def main():
+def create_tables():
     with engine.begin() as conn:
         conn.execute(text(CREATE_TABLES_SQL))
 
     print("Tables created successfully.")
+
+
+def main():
+    create_tables()
 
 
 if __name__ == "__main__":

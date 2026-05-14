@@ -4,11 +4,6 @@ from sqlalchemy import text
 from database.db_config import engine
 
 
-st.set_page_config(
-    page_title="FlightInsight Data Admin",
-    layout="wide"
-)
-
 st.title("FlightInsight Database Admin")
 
 st.write(
@@ -25,7 +20,9 @@ TABLES = [
     "dim_flight",
     "dim_aircraft",
     "dim_delay_cause",
-    "fact_flightperformance"
+    "dim_api_snapshot",
+    "fact_flightperformance",
+    "fact_liveflightstatus"
 ]
 
 
