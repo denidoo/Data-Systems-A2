@@ -46,7 +46,6 @@ def load_flight_data():
         LEFT JOIN dim_time t 
             ON f.time_id = t.time_id;
     """
-    """
 
     df = pd.read_sql(query, conn)
     conn.close()
