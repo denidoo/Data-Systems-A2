@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from database.db_config import get_connection
+from db_config import get_connection
 
 
 st.set_page_config(
@@ -44,7 +44,7 @@ def load_flight_data():
         LEFT JOIN dim_airport dest 
             ON f.destination_airport_id = dest.airport_id
         LEFT JOIN dim_time t 
-            ON f.time_id = t.time_id;
+            ON f.scheduled_departure_time_id = t.time_id;
     """
 
     df = pd.read_sql(query, conn)
