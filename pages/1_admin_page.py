@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from database.db_config import get_connection
+from database.db_config import engine
 
 
 st.set_page_config(
@@ -78,23 +79,94 @@ except Exception as e:
 
 st.header("Upload Raw Dataset")
 
-uploaded_files = st.file_uploader(
-    "Upload CSV files",
-    type=["csv"],
-    accept_multiple_files=True
-)
+import streamlit as st
+import pandas as pd
+from sqlalchemy import text
 
-if uploaded_files:
-    raw_data_path = Path("data/raw")
-    raw_data_path.mkdir(parents=True, exist_ok=True)
+TABLES = {
+    "Dim Airline": "dim_airline",
+    "Dim Airport": "dim_airport",
+    "Dim Aircraft": "dim_aircraft",
+    "Dim Date": "dim_date",
+    "Dim Time": "dim_time",
+    "Dim Flight": "dim_flight",
+    "Dim Weather Condition": "dim_weather_condition",
+    "Dim Delay Cause": "dim_delay_cause",
+    "Fact Flight Performance": "fact_flightperformances",
+    "Fact Live Flight Status": "fact_liveflightstatuses",
+}
 
-    for uploaded_file in uploaded_files:
-        save_path = raw_data_path / uploaded_file.name
 
-        with open(save_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+def load_file(uploaded_file):
+    file_name = uploaded_file.name.lower()
 
-    st.success("Files uploaded successfully.")
+    if file_name.endswith(".csv"):
+        encodings = ["utf-8", "utf-8-sig", "latin1", "cp1252"]
+
+        for encoding in encodings:
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+
+        raise ValueError(
+            "Could not read CSV file. Try saving it as UTF-8 CSV and uploading again."
+        )
+
+    if file_name.endswith((".xlsx", ".xls")):
+        return pd.read_excel(uploaded_file)
+
+    raise ValueError("Only CSV or Excel files are supported.")
+
+
+def upload_dataframe_to_table(df, table_name):
+    df.to_sql(
+        table_name,
+        con=engine,
+        if_exists="append",
+        index=False,
+        method="multi"
+    )
+
+
+def show_upload_page():
+    st.title("Upload Data to Database")
+
+    selected_label = st.selectbox(
+        "Choose table to upload into",
+        list(TABLES.keys())
+    )
+
+    selected_table = TABLES[selected_label]
+
+    uploaded_file = st.file_uploader(
+        "Upload CSV or Excel file",
+        type=["csv", "xlsx", "xls"]
+    )
+
+    if uploaded_file is not None:
+        try:
+            df = load_file(uploaded_file)
+
+            st.subheader("Preview")
+            st.dataframe(df.head(20))
+
+            st.write(f"Rows detected: `{len(df)}`")
+            st.write(f"Target table: `{selected_table}`")
+
+            if st.button("Load file into selected table"):
+                try:
+                    upload_dataframe_to_table(df, selected_table)
+                    st.success(f"Successfully loaded {len(df)} rows into {selected_table}.")
+                except Exception as e:
+                    st.error(f"Database load failed: {e}")
+
+        except Exception as e:
+            st.error(f"Upload failed: {e}")
+
+
+show_upload_page()
 
 
 # =====================================================
