@@ -8,10 +8,10 @@ from etl.transform import (
     build_fact_table
 )
 from etl.load import load
-from etl.load_api_data import insert_live_flight_status
+from etl.load_api_data import load_live_flights_from_api
 
 
-def main(load_api=True):
+def main(load_api=True, api_rows=500):
     print("Creating database tables...")
     create_tables()
 
@@ -34,17 +34,20 @@ def main(load_api=True):
     print("Main warehouse ETL completed.")
 
     if load_api:
-        print("Loading live API data...")
+        print(f"Loading {api_rows} live API flight rows...")
 
-        insert_live_flight_status(
-            flight_number="QF1",
-            airline_code="QF",
-            origin_airport_code="SYD",
-            destination_airport_code="SIN"
+        load_live_flights_from_api(
+            max_rows=api_rows,
+            page_size=100
         )
+
+        fix_sequences()
 
         print("Live API ETL completed.")
 
 
 if __name__ == "__main__":
-    main(load_api=True)
+    main(
+        load_api=True,
+        api_rows=10
+    )

@@ -103,6 +103,7 @@ CREATE TABLE fact_flightperformance (
     delay_status VARCHAR(20),
 
     api_source VARCHAR(50),
+    api_pull_timestamp TIMESTAMP,
     api_live_flight_status VARCHAR(50),
 
     api_departure_delay_minutes FLOAT,

@@ -251,6 +251,7 @@ table_option = st.selectbox(
         "dim_airport",
         "dim_date",
         "dim_time",
+        "dim_flight",
         "dim_aircraft",
         "dim_weather_condition",
         "dim_delay_cause"

@@ -1,141 +1,117 @@
 import os
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+AVIATIONSTACK_API_KEY = os.getenv("AVIATIONSTACK_API_KEY")
+BASE_URL = "http://api.aviationstack.com/v1/flights"
 
 
-BASE_URL = "https://api.aviationstack.com/v1"
+def _safe_get(data, *keys, default=None):
+    current = data
+
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+
+        current = current.get(key)
+
+        if current is None:
+            return default
+
+    return current
 
 
-def _get(endpoint, params=None):
-    api_key = os.getenv("AVIATIONSTACK_API_KEY")
-
-    if not api_key:
-        raise ValueError("Missing AVIATIONSTACK_API_KEY environment variable.")
-
-    if params is None:
-        params = {}
-
-    params["access_key"] = api_key
-
-    response = requests.get(
-        f"{BASE_URL}{endpoint}",
-        params=params,
-        timeout=15
-    )
-
-    response.raise_for_status()
-    return response.json()
-
-
-def get_live_flight_status(flight_number):
+def get_live_flights(max_rows=500, page_size=100):
     """
-    Gets real-time Aviationstack flight data.
-    Example flight numbers: QF1, EK412, BA15, AA100.
+    Pulls multiple live flight records from Aviationstack.
+
+    max_rows controls the total number of API flight rows to request.
+    page_size controls how many rows are requested per API call.
     """
 
-    try:
-        data = _get(
-            "/flights",
-            params={
-                "flight_iata": flight_number
-            }
-        )
-    except Exception:
-        return {
-            "live_flight_status": "Unknown",
-            "departure_delay_minutes_live": 0,
-            "arrival_delay_minutes_live": 0,
+    if not AVIATIONSTACK_API_KEY:
+        raise ValueError("AVIATIONSTACK_API_KEY is missing from your .env file.")
+
+    all_flights = []
+    offset = 0
+
+    while len(all_flights) < max_rows:
+        remaining = max_rows - len(all_flights)
+        limit = min(page_size, remaining)
+
+        params = {
+            "access_key": AVIATIONSTACK_API_KEY,
+            "limit": limit,
+            "offset": offset
         }
 
-    flights = data.get("data", [])
+        response = requests.get(BASE_URL, params=params, timeout=30)
+        response.raise_for_status()
 
-    if not flights:
-        return {
-            "live_flight_status": "Unknown",
-            "departure_delay_minutes_live": 0,
-            "arrival_delay_minutes_live": 0,
-        }
+        payload = response.json()
+        rows = payload.get("data", [])
 
-    flight = flights[0]
+        if not rows:
+            break
 
-    status = flight.get("flight_status", "Unknown")
+        for row in rows:
+            normalised = normalise_flight(row)
 
-    departure = flight.get("departure", {}) or {}
-    arrival = flight.get("arrival", {}) or {}
+            if normalised is not None:
+                all_flights.append(normalised)
 
-    departure_delay = departure.get("delay", 0) or 0
-    arrival_delay = arrival.get("delay", 0) or 0
+        offset += limit
+
+    return all_flights
+
+
+def normalise_flight(row):
+    flight_number = _safe_get(row, "flight", "iata")
+    airline_code = _safe_get(row, "airline", "iata")
+    airline_name = _safe_get(row, "airline", "name")
+
+    origin_airport_code = _safe_get(row, "departure", "iata")
+    origin_airport_name = _safe_get(row, "departure", "airport")
+
+    destination_airport_code = _safe_get(row, "arrival", "iata")
+    destination_airport_name = _safe_get(row, "arrival", "airport")
+
+    if not flight_number or not airline_code or not origin_airport_code or not destination_airport_code:
+        return None
+
+    departure_delay = _safe_get(row, "departure", "delay", default=0) or 0
+    arrival_delay = _safe_get(row, "arrival", "delay", default=0) or 0
+
+    scheduled_departure = _safe_get(row, "departure", "scheduled")
+    actual_departure = _safe_get(row, "departure", "actual")
+
+    scheduled_arrival = _safe_get(row, "arrival", "scheduled")
+    actual_arrival = _safe_get(row, "arrival", "actual")
 
     return {
-        "live_flight_status": status,
+        "flight_number": flight_number,
+        "airline_code": airline_code,
+        "airline_name": airline_name or airline_code,
+
+        "origin_airport_code": origin_airport_code,
+        "origin_airport_name": origin_airport_name or origin_airport_code,
+
+        "destination_airport_code": destination_airport_code,
+        "destination_airport_name": destination_airport_name or destination_airport_code,
+
+        "live_flight_status": row.get("flight_status"),
+
         "departure_delay_minutes_live": departure_delay,
         "arrival_delay_minutes_live": arrival_delay,
-    }
 
+        "scheduled_departure_datetime": scheduled_departure,
+        "actual_departure_datetime": actual_departure,
+        "scheduled_arrival_datetime": scheduled_arrival,
+        "actual_arrival_datetime": actual_arrival,
 
-def get_airport_live_flight_summary(iata_code):
-    """
-    Creates simple airport congestion features using live flights at an airport.
-    This is not a direct airport delay API. It estimates congestion from live departures/arrivals.
-    """
-
-    try:
-        departures_data = _get(
-            "/flights",
-            params={
-                "dep_iata": iata_code,
-                "limit": 100
-            }
-        )
-
-        arrivals_data = _get(
-            "/flights",
-            params={
-                "arr_iata": iata_code,
-                "limit": 100
-            }
-        )
-
-    except Exception:
-        return {
-            "airport_live_departures_count": 0,
-            "airport_live_arrivals_count": 0,
-            "airport_delayed_departures_count": 0,
-            "airport_delayed_arrivals_count": 0,
-            "airport_avg_departure_delay": 0,
-            "airport_avg_arrival_delay": 0,
-        }
-
-    departures = departures_data.get("data", [])
-    arrivals = arrivals_data.get("data", [])
-
-    departure_delays = [
-        flight.get("departure", {}).get("delay", 0) or 0
-        for flight in departures
-    ]
-
-    arrival_delays = [
-        flight.get("arrival", {}).get("delay", 0) or 0
-        for flight in arrivals
-    ]
-
-    delayed_departures = sum(delay > 0 for delay in departure_delays)
-    delayed_arrivals = sum(delay > 0 for delay in arrival_delays)
-
-    avg_departure_delay = (
-        sum(departure_delays) / len(departure_delays)
-        if departure_delays else 0
-    )
-
-    avg_arrival_delay = (
-        sum(arrival_delays) / len(arrival_delays)
-        if arrival_delays else 0
-    )
-
-    return {
-        "airport_live_departures_count": len(departures),
-        "airport_live_arrivals_count": len(arrivals),
-        "airport_delayed_departures_count": delayed_departures,
-        "airport_delayed_arrivals_count": delayed_arrivals,
-        "airport_avg_departure_delay": avg_departure_delay,
-        "airport_avg_arrival_delay": avg_arrival_delay,
+        "flight_type": "Unknown",
+        "route_category": "Unknown",
+        "route_distance": None
     }
