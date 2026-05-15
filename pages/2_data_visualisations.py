@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from db_config import get_connection
+from database.db_config import get_connection
 
 
 st.set_page_config(
