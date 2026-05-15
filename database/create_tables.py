@@ -3,10 +3,8 @@ from database.db_config import engine
 
 
 CREATE_TABLES_SQL = """
-DROP TABLE IF EXISTS fact_liveflightstatus CASCADE;
 DROP TABLE IF EXISTS fact_flightperformance CASCADE;
 
-DROP TABLE IF EXISTS dim_api_snapshot CASCADE;
 DROP TABLE IF EXISTS dim_date CASCADE;
 DROP TABLE IF EXISTS dim_time CASCADE;
 DROP TABLE IF EXISTS dim_airport CASCADE;
@@ -80,15 +78,9 @@ CREATE TABLE dim_delay_cause (
     is_controllable BOOLEAN
 );
 
-CREATE TABLE dim_api_snapshot (
-    api_snapshot_id SERIAL PRIMARY KEY,
-    api_provider VARCHAR(50),
-    snapshot_timestamp TIMESTAMP,
-    request_type VARCHAR(50)
-);
-
 CREATE TABLE fact_flightperformance (
     flight_performance_id SERIAL PRIMARY KEY,
+
     date_id INTEGER REFERENCES dim_date(date_id),
     time_id INTEGER REFERENCES dim_time(time_id),
     origin_airport_id INTEGER REFERENCES dim_airport(airport_id),
@@ -98,46 +90,37 @@ CREATE TABLE fact_flightperformance (
     flight_id INTEGER REFERENCES dim_flight(flight_id),
     aircraft_id INTEGER REFERENCES dim_aircraft(aircraft_id),
     delay_cause_id INTEGER REFERENCES dim_delay_cause(delay_cause_id),
+
     delay_minutes INTEGER,
     cancellation_flag BOOLEAN,
     passengers INTEGER,
+
     scheduled_departure_datetime TIMESTAMP,
     actual_departure_datetime TIMESTAMP,
     scheduled_arrival_datetime TIMESTAMP,
     actual_arrival_datetime TIMESTAMP,
-    delay_status VARCHAR(20)
-);
 
-CREATE TABLE fact_liveflightstatus (
-    live_status_id SERIAL PRIMARY KEY,
+    delay_status VARCHAR(20),
 
-    api_snapshot_id INTEGER REFERENCES dim_api_snapshot(api_snapshot_id),
+    api_source VARCHAR(50),
+    api_live_flight_status VARCHAR(50),
 
-    flight_id INTEGER REFERENCES dim_flight(flight_id),
-    origin_airport_id INTEGER REFERENCES dim_airport(airport_id),
-    destination_airport_id INTEGER REFERENCES dim_airport(airport_id),
-    airline_id INTEGER REFERENCES dim_airline(airline_id),
-    date_id INTEGER REFERENCES dim_date(date_id),
-    time_id INTEGER REFERENCES dim_time(time_id),
+    api_departure_delay_minutes FLOAT,
+    api_arrival_delay_minutes FLOAT,
 
-    live_flight_status VARCHAR(50),
+    api_origin_live_departures_count INTEGER,
+    api_origin_live_arrivals_count INTEGER,
+    api_origin_delayed_departures_count INTEGER,
+    api_origin_delayed_arrivals_count INTEGER,
+    api_origin_avg_departure_delay FLOAT,
+    api_origin_avg_arrival_delay FLOAT,
 
-    departure_delay_minutes_live FLOAT,
-    arrival_delay_minutes_live FLOAT,
-
-    origin_live_departures_count INTEGER,
-    origin_live_arrivals_count INTEGER,
-    origin_delayed_departures_count INTEGER,
-    origin_delayed_arrivals_count INTEGER,
-    origin_avg_departure_delay FLOAT,
-    origin_avg_arrival_delay FLOAT,
-
-    destination_live_departures_count INTEGER,
-    destination_live_arrivals_count INTEGER,
-    destination_delayed_departures_count INTEGER,
-    destination_delayed_arrivals_count INTEGER,
-    destination_avg_departure_delay FLOAT,
-    destination_avg_arrival_delay FLOAT
+    api_destination_live_departures_count INTEGER,
+    api_destination_live_arrivals_count INTEGER,
+    api_destination_delayed_departures_count INTEGER,
+    api_destination_delayed_arrivals_count INTEGER,
+    api_destination_avg_departure_delay FLOAT,
+    api_destination_avg_arrival_delay FLOAT
 );
 """
 

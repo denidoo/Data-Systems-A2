@@ -1,55 +1,33 @@
-import os
 from datetime import datetime
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from database.db_config import engine
 
 from api.aviation_stack_api import (
     get_live_flight_status,
     get_airport_live_flight_summary
 )
 
-load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+def clean_code(value):
+    if value is None:
+        return None
 
-
-def get_or_create_api_snapshot(conn, request_type="flight_prediction"):
-    result = conn.execute(
-        text("""
-            INSERT INTO dim_api_snapshot (
-                api_provider,
-                snapshot_timestamp,
-                request_type
-            )
-            VALUES (
-                'Aviationstack',
-                :snapshot_timestamp,
-                :request_type
-            )
-            RETURNING api_snapshot_id;
-        """),
-        {
-            "snapshot_timestamp": datetime.now(),
-            "request_type": request_type
-        }
-    )
-
-    return result.scalar()
+    return str(value).strip().upper()
 
 
-def get_id(conn, table, id_col, lookup_col, lookup_value):
+def get_id(conn, table_name, id_column, lookup_column, lookup_value):
     result = conn.execute(
         text(f"""
-            SELECT {id_col}
-            FROM {table}
-            WHERE {lookup_col} = :lookup_value
+            SELECT {id_column}
+            FROM {table_name}
+            WHERE {lookup_column} = :lookup_value
             LIMIT 1;
         """),
         {"lookup_value": lookup_value}
-    ).scalar()
+    )
 
-    return result
+    return result.scalar()
 
 
 def get_or_create_date_id(conn, selected_datetime):
@@ -125,7 +103,10 @@ def get_or_create_time_id(conn, selected_datetime):
 
     return time_id
 
+
 def get_or_create_airline_id(conn, airline_code, airline_name=None):
+    airline_code = clean_code(airline_code)
+
     airline_id = get_id(
         conn,
         "dim_airline",
@@ -135,6 +116,18 @@ def get_or_create_airline_id(conn, airline_code, airline_name=None):
     )
 
     if airline_id is not None:
+        conn.execute(
+            text("""
+                UPDATE dim_airline
+                SET airline_name = COALESCE(:airline_name, airline_name)
+                WHERE airline_id = :airline_id;
+            """),
+            {
+                "airline_id": airline_id,
+                "airline_name": airline_name
+            }
+        )
+
         return airline_id
 
     result = conn.execute(
@@ -158,7 +151,18 @@ def get_or_create_airline_id(conn, airline_code, airline_name=None):
     return result.scalar()
 
 
-def get_or_create_airport_id(conn, airport_code, airport_name=None):
+def get_or_create_airport_id(
+    conn,
+    airport_code,
+    airport_name=None,
+    airport_city="Unknown",
+    airport_country="Unknown",
+    airport_continent="Unknown",
+    airport_elevation=None,
+    airport_type="Unknown"
+):
+    airport_code = clean_code(airport_code)
+
     airport_id = get_id(
         conn,
         "dim_airport",
@@ -168,30 +172,76 @@ def get_or_create_airport_id(conn, airport_code, airport_name=None):
     )
 
     if airport_id is not None:
+        conn.execute(
+            text("""
+                UPDATE dim_airport
+                SET
+                    airport_name = COALESCE(:airport_name, airport_name),
+                    airport_city = COALESCE(:airport_city, airport_city),
+                    airport_country = COALESCE(:airport_country, airport_country),
+                    airport_continent = COALESCE(:airport_continent, airport_continent),
+                    airport_elevation = COALESCE(:airport_elevation, airport_elevation),
+                    airport_type = COALESCE(:airport_type, airport_type)
+                WHERE airport_id = :airport_id;
+            """),
+            {
+                "airport_id": airport_id,
+                "airport_name": airport_name,
+                "airport_city": airport_city,
+                "airport_country": airport_country,
+                "airport_continent": airport_continent,
+                "airport_elevation": airport_elevation,
+                "airport_type": airport_type
+            }
+        )
+
         return airport_id
 
     result = conn.execute(
         text("""
             INSERT INTO dim_airport (
                 airport_code,
-                airport_name
+                airport_name,
+                airport_city,
+                airport_country,
+                airport_continent,
+                airport_elevation,
+                airport_type
             )
             VALUES (
                 :airport_code,
-                :airport_name
+                :airport_name,
+                :airport_city,
+                :airport_country,
+                :airport_continent,
+                :airport_elevation,
+                :airport_type
             )
             RETURNING airport_id;
         """),
         {
             "airport_code": airport_code,
-            "airport_name": airport_name or airport_code
+            "airport_name": airport_name or airport_code,
+            "airport_city": airport_city,
+            "airport_country": airport_country,
+            "airport_continent": airport_continent,
+            "airport_elevation": airport_elevation,
+            "airport_type": airport_type
         }
     )
 
     return result.scalar()
 
 
-def get_or_create_flight_id(conn, flight_number):
+def get_or_create_flight_id(
+    conn,
+    flight_number,
+    flight_type="Unknown",
+    route_category="Unknown",
+    route_distance=None
+):
+    flight_number = clean_code(flight_number)
+
     flight_id = get_id(
         conn,
         "dim_flight",
@@ -201,24 +251,192 @@ def get_or_create_flight_id(conn, flight_number):
     )
 
     if flight_id is not None:
+        conn.execute(
+            text("""
+                UPDATE dim_flight
+                SET
+                    flight_type = COALESCE(:flight_type, flight_type),
+                    route_category = COALESCE(:route_category, route_category),
+                    route_distance = COALESCE(:route_distance, route_distance)
+                WHERE flight_id = :flight_id;
+            """),
+            {
+                "flight_id": flight_id,
+                "flight_type": flight_type,
+                "route_category": route_category,
+                "route_distance": route_distance
+            }
+        )
+
         return flight_id
 
     result = conn.execute(
         text("""
             INSERT INTO dim_flight (
-                flight_number
+                flight_number,
+                flight_type,
+                route_category,
+                route_distance
             )
             VALUES (
-                :flight_number
+                :flight_number,
+                :flight_type,
+                :route_category,
+                :route_distance
             )
             RETURNING flight_id;
         """),
         {
-            "flight_number": flight_number
+            "flight_number": flight_number,
+            "flight_type": flight_type,
+            "route_category": route_category,
+            "route_distance": route_distance
         }
     )
 
     return result.scalar()
+
+
+def get_default_weather_id(conn):
+    weather_id = get_id(
+        conn,
+        "dim_weather_condition",
+        "weather_id",
+        "weather_type",
+        "Unknown"
+    )
+
+    if weather_id is not None:
+        return weather_id
+
+    result = conn.execute(
+        text("""
+            INSERT INTO dim_weather_condition (
+                weather_type,
+                temperature,
+                wind_speed,
+                visibility
+            )
+            VALUES (
+                'Unknown',
+                NULL,
+                NULL,
+                NULL
+            )
+            RETURNING weather_id;
+        """)
+    )
+
+    return result.scalar()
+
+
+def get_default_aircraft_id(conn):
+    result = conn.execute(
+        text("""
+            SELECT aircraft_id
+            FROM dim_aircraft
+            WHERE aircraft_model = 'Unknown'
+            LIMIT 1;
+        """)
+    )
+
+    aircraft_id = result.scalar()
+
+    if aircraft_id is not None:
+        return aircraft_id
+
+    result = conn.execute(
+        text("""
+            INSERT INTO dim_aircraft (
+                tail_number,
+                aircraft_model,
+                manufacturer,
+                seating_capacity,
+                aircraft_category
+            )
+            VALUES (
+                'UNKNOWN',
+                'Unknown',
+                'Unknown',
+                NULL,
+                'Unknown'
+            )
+            RETURNING aircraft_id;
+        """)
+    )
+
+    return result.scalar()
+
+
+def get_default_delay_cause_id(conn):
+    delay_cause_id = get_id(
+        conn,
+        "dim_delay_cause",
+        "delay_cause_id",
+        "delay_cause_type",
+        "API / Live Status"
+    )
+
+    if delay_cause_id is not None:
+        return delay_cause_id
+
+    result = conn.execute(
+        text("""
+            INSERT INTO dim_delay_cause (
+                delay_cause_type,
+                delay_cause_detail,
+                is_controllable
+            )
+            VALUES (
+                'API / Live Status',
+                'Live flight status inserted from Aviationstack API',
+                FALSE
+            )
+            RETURNING delay_cause_id;
+        """)
+    )
+
+    return result.scalar()
+
+
+def extract_api_dimension_values(
+    flight_status,
+    flight_number,
+    airline_code,
+    origin_airport_code,
+    destination_airport_code
+):
+    airline_name = (
+        flight_status.get("airline_name")
+        or flight_status.get("airline")
+        or airline_code
+    )
+
+    origin_airport_name = (
+        flight_status.get("origin_airport_name")
+        or flight_status.get("departure_airport")
+        or origin_airport_code
+    )
+
+    destination_airport_name = (
+        flight_status.get("destination_airport_name")
+        or flight_status.get("arrival_airport")
+        or destination_airport_code
+    )
+
+    flight_type = flight_status.get("flight_type") or "Unknown"
+    route_category = flight_status.get("route_category") or "Unknown"
+    route_distance = flight_status.get("route_distance")
+
+    return {
+        "airline_name": airline_name,
+        "origin_airport_name": origin_airport_name,
+        "destination_airport_name": destination_airport_name,
+        "flight_type": flight_type,
+        "route_category": route_category,
+        "route_distance": route_distance
+    }
+
 
 def insert_live_flight_status(
     flight_number,
@@ -227,6 +445,11 @@ def insert_live_flight_status(
     destination_airport_code,
     selected_datetime=None
 ):
+    flight_number = clean_code(flight_number)
+    airline_code = clean_code(airline_code)
+    origin_airport_code = clean_code(origin_airport_code)
+    destination_airport_code = clean_code(destination_airport_code)
+
     if selected_datetime is None:
         selected_datetime = datetime.now()
 
@@ -234,124 +457,177 @@ def insert_live_flight_status(
     origin_summary = get_airport_live_flight_summary(origin_airport_code)
     destination_summary = get_airport_live_flight_summary(destination_airport_code)
 
-    with engine.begin() as conn:
-        api_snapshot_id = get_or_create_api_snapshot(conn)
+    dim_values = extract_api_dimension_values(
+        flight_status,
+        flight_number,
+        airline_code,
+        origin_airport_code,
+        destination_airport_code
+    )
 
+    api_departure_delay = flight_status.get("departure_delay_minutes_live", 0)
+    api_arrival_delay = flight_status.get("arrival_delay_minutes_live", 0)
+
+    delay_minutes = api_departure_delay or 0
+    delay_status = "Delayed" if delay_minutes > 15 else "On Time"
+
+    with engine.begin() as conn:
         airline_id = get_or_create_airline_id(
             conn,
-            airline_code=airline_code
+            airline_code=airline_code,
+            airline_name=dim_values["airline_name"]
         )
 
         origin_airport_id = get_or_create_airport_id(
             conn,
-            airport_code=origin_airport_code
+            airport_code=origin_airport_code,
+            airport_name=dim_values["origin_airport_name"]
         )
 
         destination_airport_id = get_or_create_airport_id(
             conn,
-            airport_code=destination_airport_code
+            airport_code=destination_airport_code,
+            airport_name=dim_values["destination_airport_name"]
         )
 
         flight_id = get_or_create_flight_id(
             conn,
-            flight_number=flight_number
+            flight_number=flight_number,
+            flight_type=dim_values["flight_type"],
+            route_category=dim_values["route_category"],
+            route_distance=dim_values["route_distance"]
         )
 
         date_id = get_or_create_date_id(conn, selected_datetime)
         time_id = get_or_create_time_id(conn, selected_datetime)
 
-        missing = {
-            "flight_id": flight_id,
-            "airline_id": airline_id,
-            "origin_airport_id": origin_airport_id,
-            "destination_airport_id": destination_airport_id,
-        }
-
-        missing_values = [key for key, value in missing.items() if value is None]
-
-        if missing_values:
-            raise ValueError(
-                f"Could not insert API data because these dimension IDs were missing: {missing_values}"
-            )
+        weather_id = get_default_weather_id(conn)
+        aircraft_id = get_default_aircraft_id(conn)
+        delay_cause_id = get_default_delay_cause_id(conn)
 
         conn.execute(
             text("""
-                INSERT INTO fact_liveflightstatus (
-                    api_snapshot_id,
-                    flight_id,
+                INSERT INTO fact_flightperformance (
+                    date_id,
+                    time_id,
                     origin_airport_id,
                     destination_airport_id,
                     airline_id,
-                    date_id,
-                    time_id,
-                    live_flight_status,
-                    departure_delay_minutes_live,
-                    arrival_delay_minutes_live,
-                    origin_live_departures_count,
-                    origin_live_arrivals_count,
-                    origin_delayed_departures_count,
-                    origin_delayed_arrivals_count,
-                    origin_avg_departure_delay,
-                    origin_avg_arrival_delay,
-                    destination_live_departures_count,
-                    destination_live_arrivals_count,
-                    destination_delayed_departures_count,
-                    destination_delayed_arrivals_count,
-                    destination_avg_departure_delay,
-                    destination_avg_arrival_delay
+                    weather_id,
+                    flight_id,
+                    aircraft_id,
+                    delay_cause_id,
+
+                    delay_minutes,
+                    cancellation_flag,
+                    passengers,
+
+                    scheduled_departure_datetime,
+                    actual_departure_datetime,
+                    scheduled_arrival_datetime,
+                    actual_arrival_datetime,
+                    delay_status,
+
+                    api_source,
+                    api_live_flight_status,
+                    api_departure_delay_minutes,
+                    api_arrival_delay_minutes,
+
+                    api_origin_live_departures_count,
+                    api_origin_live_arrivals_count,
+                    api_origin_delayed_departures_count,
+                    api_origin_delayed_arrivals_count,
+                    api_origin_avg_departure_delay,
+                    api_origin_avg_arrival_delay,
+
+                    api_destination_live_departures_count,
+                    api_destination_live_arrivals_count,
+                    api_destination_delayed_departures_count,
+                    api_destination_delayed_arrivals_count,
+                    api_destination_avg_departure_delay,
+                    api_destination_avg_arrival_delay
                 )
                 VALUES (
-                    :api_snapshot_id,
-                    :flight_id,
+                    :date_id,
+                    :time_id,
                     :origin_airport_id,
                     :destination_airport_id,
                     :airline_id,
-                    :date_id,
-                    :time_id,
-                    :live_flight_status,
-                    :departure_delay_minutes_live,
-                    :arrival_delay_minutes_live,
-                    :origin_live_departures_count,
-                    :origin_live_arrivals_count,
-                    :origin_delayed_departures_count,
-                    :origin_delayed_arrivals_count,
-                    :origin_avg_departure_delay,
-                    :origin_avg_arrival_delay,
-                    :destination_live_departures_count,
-                    :destination_live_arrivals_count,
-                    :destination_delayed_departures_count,
-                    :destination_delayed_arrivals_count,
-                    :destination_avg_departure_delay,
-                    :destination_avg_arrival_delay
+                    :weather_id,
+                    :flight_id,
+                    :aircraft_id,
+                    :delay_cause_id,
+
+                    :delay_minutes,
+                    FALSE,
+                    0,
+
+                    :scheduled_departure_datetime,
+                    :actual_departure_datetime,
+                    :scheduled_arrival_datetime,
+                    :actual_arrival_datetime,
+                    :delay_status,
+
+                    :api_source,
+                    :api_live_flight_status,
+                    :api_departure_delay_minutes,
+                    :api_arrival_delay_minutes,
+
+                    :api_origin_live_departures_count,
+                    :api_origin_live_arrivals_count,
+                    :api_origin_delayed_departures_count,
+                    :api_origin_delayed_arrivals_count,
+                    :api_origin_avg_departure_delay,
+                    :api_origin_avg_arrival_delay,
+
+                    :api_destination_live_departures_count,
+                    :api_destination_live_arrivals_count,
+                    :api_destination_delayed_departures_count,
+                    :api_destination_delayed_arrivals_count,
+                    :api_destination_avg_departure_delay,
+                    :api_destination_avg_arrival_delay
                 );
             """),
             {
-                "api_snapshot_id": api_snapshot_id,
-                "flight_id": flight_id,
+                "date_id": date_id,
+                "time_id": time_id,
                 "origin_airport_id": origin_airport_id,
                 "destination_airport_id": destination_airport_id,
                 "airline_id": airline_id,
-                "date_id": date_id,
-                "time_id": time_id,
-                "live_flight_status": flight_status["live_flight_status"],
-                "departure_delay_minutes_live": flight_status["departure_delay_minutes_live"],
-                "arrival_delay_minutes_live": flight_status["arrival_delay_minutes_live"],
-                "origin_live_departures_count": origin_summary["airport_live_departures_count"],
-                "origin_live_arrivals_count": origin_summary["airport_live_arrivals_count"],
-                "origin_delayed_departures_count": origin_summary["airport_delayed_departures_count"],
-                "origin_delayed_arrivals_count": origin_summary["airport_delayed_arrivals_count"],
-                "origin_avg_departure_delay": origin_summary["airport_avg_departure_delay"],
-                "origin_avg_arrival_delay": origin_summary["airport_avg_arrival_delay"],
-                "destination_live_departures_count": destination_summary["airport_live_departures_count"],
-                "destination_live_arrivals_count": destination_summary["airport_live_arrivals_count"],
-                "destination_delayed_departures_count": destination_summary["airport_delayed_departures_count"],
-                "destination_delayed_arrivals_count": destination_summary["airport_delayed_arrivals_count"],
-                "destination_avg_departure_delay": destination_summary["airport_avg_departure_delay"],
-                "destination_avg_arrival_delay": destination_summary["airport_avg_arrival_delay"],
+                "weather_id": weather_id,
+                "flight_id": flight_id,
+                "aircraft_id": aircraft_id,
+                "delay_cause_id": delay_cause_id,
+
+                "delay_minutes": delay_minutes,
+                "scheduled_departure_datetime": selected_datetime,
+                "actual_departure_datetime": selected_datetime,
+                "scheduled_arrival_datetime": selected_datetime,
+                "actual_arrival_datetime": selected_datetime,
+                "delay_status": delay_status,
+
+                "api_source": "Aviationstack",
+                "api_live_flight_status": flight_status.get("live_flight_status"),
+                "api_departure_delay_minutes": api_departure_delay,
+                "api_arrival_delay_minutes": api_arrival_delay,
+
+                "api_origin_live_departures_count": origin_summary.get("airport_live_departures_count", 0),
+                "api_origin_live_arrivals_count": origin_summary.get("airport_live_arrivals_count", 0),
+                "api_origin_delayed_departures_count": origin_summary.get("airport_delayed_departures_count", 0),
+                "api_origin_delayed_arrivals_count": origin_summary.get("airport_delayed_arrivals_count", 0),
+                "api_origin_avg_departure_delay": origin_summary.get("airport_avg_departure_delay", 0),
+                "api_origin_avg_arrival_delay": origin_summary.get("airport_avg_arrival_delay", 0),
+
+                "api_destination_live_departures_count": destination_summary.get("airport_live_departures_count", 0),
+                "api_destination_live_arrivals_count": destination_summary.get("airport_live_arrivals_count", 0),
+                "api_destination_delayed_departures_count": destination_summary.get("airport_delayed_departures_count", 0),
+                "api_destination_delayed_arrivals_count": destination_summary.get("airport_delayed_arrivals_count", 0),
+                "api_destination_avg_departure_delay": destination_summary.get("airport_avg_departure_delay", 0),
+                "api_destination_avg_arrival_delay": destination_summary.get("airport_avg_arrival_delay", 0)
             }
         )
 
-    print("API data inserted into Fact_LiveFlightStatus using dimension foreign keys.")
+    print("API data inserted into fact_flightperformance and dimension tables updated.")
 
 
 if __name__ == "__main__":
