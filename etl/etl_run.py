@@ -1,53 +1,20 @@
 from database.create_tables import create_tables
-from database.fix_sequences import fix_sequences
-
-from etl.extract import extract
-from etl.transform import (
-    transform,
-    build_dimensions,
-    build_fact_table
-)
-from etl.load import load
-from etl.load_api_data import load_live_flights_from_api
+from etl.extract import extract_data
+from etl.transform import transform_data
+from etl.load import load_data
 
 
-def main(load_api=True, api_rows=500):
-    print("Creating database tables...")
+def main():
+    print("Running historical ETL pipeline...")
+
     create_tables()
 
-    print("Starting main ETL process...")
+    raw_data = extract_data()
+    processed_data = transform_data(raw_data)
+    load_data(processed_data)
 
-    raw_df = extract()
-    transformed_df = transform(raw_df)
-
-    dimensions = build_dimensions(transformed_df)
-
-    fact_table = build_fact_table(
-        transformed_df,
-        dimensions
-    )
-
-    load(dimensions, fact_table)
-
-    fix_sequences()
-
-    print("Main warehouse ETL completed.")
-
-    if load_api:
-        print(f"Loading {api_rows} live API flight rows...")
-
-        load_live_flights_from_api(
-            max_rows=api_rows,
-            page_size=100
-        )
-
-        fix_sequences()
-
-        print("Live API ETL completed.")
+    print("Historical ETL pipeline complete.")
 
 
 if __name__ == "__main__":
-    main(
-        load_api=True,
-        api_rows=10
-    )
+    main()

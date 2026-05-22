@@ -1,510 +1,145 @@
 import pandas as pd
-import numpy as np
-from pathlib import Path
-
-from etl.extract import (
-    get_first_existing_column,
-    normalise_columns,
-    extract_airlines_lookup,
-    extract_airports_lookup
-)
 
 
-PROCESSED_DIR = Path("data/processed")
-PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def classify_time_of_day(hour):
-    if 0 <= hour <= 5:
-        return "Night"
-    elif 6 <= hour <= 11:
-        return "Morning"
-    elif 12 <= hour <= 17:
-        return "Afternoon"
-    else:
-        return "Evening"
-
-
-def classify_route(distance):
-    if distance < 800:
-        return "Short-haul"
-    elif distance < 2500:
-        return "Medium-haul"
-    else:
-        return "Long-haul"
-
-
-def classify_delay_cause(row):
-    delay_columns = {
-        "carrier_delay": "Airline",
-        "weather_delay": "Weather",
-        "nas_delay": "ATC",
-        "security_delay": "Security",
-        "late_aircraft_delay": "Late Aircraft"
-    }
-
-    available = {
-        col: label
-        for col, label in delay_columns.items()
-        if col in row.index
-    }
-
-    if not available:
-        return "Unknown"
-
-    max_column = None
-    max_value = 0
-
-    for col in available:
-        value = row[col]
-        if pd.notna(value) and value > max_value:
-            max_value = value
-            max_column = col
-
-    if max_column is None or max_value <= 0:
-        return "None"
-
-    return available[max_column]
-
-
-def make_datetime(date_value, time_value):
-    if pd.isna(date_value):
-        return pd.NaT
+def clean_time(value):
+    if pd.isna(value):
+        return None
 
     try:
-        time_value = int(time_value)
-    except Exception:
-        time_value = 0
+        value = int(value)
+    except ValueError:
+        return None
 
-    hour = min(max(time_value // 100, 0), 23)
-    minute = min(max(time_value % 100, 0), 59)
+    value = f"{value:04d}"
+    hour = int(value[:2])
+    minute = int(value[2:])
 
-    return (
-        pd.to_datetime(date_value)
-        + pd.to_timedelta(hour, unit="h")
-        + pd.to_timedelta(minute, unit="m")
+    if hour >= 24:
+        hour = 23
+        minute = 59
+
+    return f"{hour:02d}:{minute:02d}:00"
+
+
+def get_time_of_day(hour):
+    if hour is None:
+        return "Unknown"
+    if 5 <= hour < 12:
+        return "Morning"
+    if 12 <= hour < 17:
+        return "Afternoon"
+    if 17 <= hour < 21:
+        return "Evening"
+    return "Night"
+
+
+def transform_data(raw_data):
+    flights = raw_data["flights"].copy()
+    airlines = raw_data["airlines"].copy()
+    airports = raw_data["airports"].copy()
+
+    flights.columns = flights.columns.str.lower()
+    airlines.columns = airlines.columns.str.lower()
+    airports.columns = airports.columns.str.lower()
+
+    # Limit data size if needed while testing
+    # flights = flights.head(100000)
+
+    flights["flight_date"] = pd.to_datetime(
+        flights[["year", "month", "day"]]
     )
 
+    flights["scheduled_departure_time"] = flights["scheduled_departure"].apply(clean_time)
+    flights["actual_departure_time"] = flights["departure_time"].apply(clean_time)
 
-def transform(raw_df):
-    df = normalise_columns(raw_df)
+    flights["is_delayed"] = flights["departure_delay"].fillna(0) > 15
+    flights["delay_minutes"] = flights["departure_delay"].fillna(0).astype(int)
 
-    carrier_col = get_first_existing_column(df, [
-        "op_carrier",
-        "op_unique_carrier",
-        "mkt_unique_carrier",
-        "carrier",
-        "airline"
-    ])
+    dim_airline = airlines.rename(columns={
+        "iata_code": "airline_code",
+        "airline": "airline_name"
+    })[["airline_code", "airline_name"]].drop_duplicates()
 
-    flight_number_col = get_first_existing_column(df, [
-        "op_carrier_fl_num",
-        "flight_number"
-    ])
+    dim_airport = airports.rename(columns={
+        "iata_code": "airport_code",
+        "airport": "airport_name"
+    })
 
-    date_col = get_first_existing_column(df, [
-    "fl_date",
-    "date",
-    "flight_date"
-    ])
+    airport_cols = ["airport_code", "airport_name", "city", "state", "country"]
+    for col in airport_cols:
+        if col not in dim_airport.columns:
+            dim_airport[col] = None
 
-    has_split_date_columns = all(
-        col in df.columns for col in ["year", "month", "day"]
+    dim_airport = dim_airport[airport_cols].drop_duplicates()
+
+    dim_date = flights[["flight_date"]].drop_duplicates()
+    dim_date = dim_date.rename(columns={"flight_date": "full_date"})
+    dim_date["year"] = dim_date["full_date"].dt.year
+    dim_date["month"] = dim_date["full_date"].dt.month
+    dim_date["day"] = dim_date["full_date"].dt.day
+    dim_date["quarter"] = dim_date["full_date"].dt.quarter
+    dim_date["day_of_week"] = dim_date["full_date"].dt.dayofweek
+    dim_date["is_weekend"] = dim_date["day_of_week"].isin([5, 6])
+
+    scheduled_times = flights[["scheduled_departure_time"]].rename(
+        columns={"scheduled_departure_time": "time_value"}
     )
 
-    origin_col = get_first_existing_column(df, [
-        "origin",
-        "origin_airport"
-    ])
-
-    dest_col = get_first_existing_column(df, [
-        "dest",
-        "destination",
-        "destination_airport"
-    ])
-
-    dep_time_col = get_first_existing_column(df, [
-        "crs_dep_time",
-        "scheduled_departure",
-        "scheduled_departure_time"
-    ])
-
-    arr_delay_col = get_first_existing_column(df, [
-        "arr_delay",
-        "arrival_delay"
-    ])
-
-    cancelled_col = get_first_existing_column(df, [
-        "cancelled",
-        "cancellation_flag"
-    ])
-
-    required_map = {
-    "carrier/airline column": carrier_col,
-    "flight number column": flight_number_col,
-    "origin column": origin_col,
-    "destination column": dest_col,
-    "scheduled departure time column": dep_time_col,
-    "arrival delay column": arr_delay_col,
-    "cancelled column": cancelled_col
-    }
-
-    if date_col is None and not has_split_date_columns:
-        required_map["date column"] = None
-
-    missing = [label for label, value in required_map.items() if value is None]
-
-    if missing:
-        raise ValueError(f"Missing required columns in CSV: {missing}")
-
-    if date_col:
-        df["fl_date"] = pd.to_datetime(df[date_col], errors="coerce")
-    else:
-        df["fl_date"] = pd.to_datetime(
-            df[["year", "month", "day"]],
-            errors="coerce"
-        )
-
-    df = df.dropna(subset=["fl_date"])
-
-    df["airline_code"] = df[carrier_col].astype(str).str.strip().str.upper()
-
-    df["flight_number"] = (
-        df["airline_code"]
-        + df[flight_number_col].astype(str).str.strip()
+    actual_times = flights[["actual_departure_time"]].rename(
+        columns={"actual_departure_time": "time_value"}
     )
 
-    df["origin"] = df[origin_col].astype(str).str.strip().str.upper()
-    df["dest"] = df[dest_col].astype(str).str.strip().str.upper()
+    dim_time = pd.concat([scheduled_times, actual_times])
+    dim_time = dim_time.dropna().drop_duplicates()
 
-    df["arr_delay"] = pd.to_numeric(df[arr_delay_col], errors="coerce").fillna(0)
+    dim_time["time_value"] = pd.to_datetime(dim_time["time_value"]).dt.time
+    dim_time["hour"] = dim_time["time_value"].apply(lambda x: x.hour)
+    dim_time["minute"] = dim_time["time_value"].apply(lambda x: x.minute)
+    dim_time["time_of_day"] = dim_time["hour"].apply(get_time_of_day)
 
-    dep_delay_col = get_first_existing_column(df, [
-        "dep_delay",
-        "departure_delay"
-    ])
+    dim_flight = flights[["flight_number"]].dropna().drop_duplicates()
+    dim_flight["flight_number"] = dim_flight["flight_number"].astype(str)
 
-    if dep_delay_col:
-        df["dep_delay"] = pd.to_numeric(df[dep_delay_col], errors="coerce").fillna(0)
-    else:
-        df["dep_delay"] = 0
+    dim_aircraft = pd.DataFrame({
+        "aircraft_type": ["Unknown"]
+    })
 
-    df["cancelled"] = pd.to_numeric(df[cancelled_col], errors="coerce").fillna(0)
+    dim_weather_condition = pd.DataFrame({
+        "weather_condition": ["Unknown"]
+    })
 
-    df["delay_minutes"] = df["arr_delay"].astype(int)
-    df["delay_status"] = np.where(df["delay_minutes"] > 15, "Delayed", "On Time")
-    df["cancellation_flag"] = df["cancelled"].astype(bool)
+    dim_delay_cause = pd.DataFrame({
+        "delay_cause": ["None", "Carrier", "Weather", "NAS", "Security", "Late Aircraft"]
+    })
 
-    df["date_id"] = df["fl_date"].dt.strftime("%Y%m%d").astype(int)
+    fact_flightperformance = flights[[
+        "flight_number",
+        "airline",
+        "origin_airport",
+        "destination_airport",
+        "flight_date",
+        "scheduled_departure_time",
+        "actual_departure_time",
+        "delay_minutes",
+        "is_delayed"
+    ]].copy()
 
-    df["crs_dep_time"] = pd.to_numeric(df[dep_time_col], errors="coerce").fillna(0).astype(int)
-    df["hour"] = (df["crs_dep_time"] // 100).clip(0, 23)
-    df["minute"] = (df["crs_dep_time"] % 100).clip(0, 59)
-    df["time_id"] = df["hour"] * 100 + df["minute"]
-    df["time_of_day"] = df["hour"].apply(classify_time_of_day)
+    fact_flightperformance["aircraft_type"] = "Unknown"
+    fact_flightperformance["weather_condition"] = "Unknown"
+    fact_flightperformance["delay_cause"] = "None"
 
-    distance_col = get_first_existing_column(df, [
-        "distance",
-        "route_distance"
-    ])
-
-    if distance_col:
-        df["route_distance"] = pd.to_numeric(df[distance_col], errors="coerce").fillna(0)
-    else:
-        df["route_distance"] = 0
-
-    df["route_category"] = df["route_distance"].apply(classify_route)
-    df["flight_type"] = "Domestic"
-
-    df["scheduled_departure_datetime"] = df.apply(
-        lambda row: make_datetime(row["fl_date"], row["crs_dep_time"]),
-        axis=1
-    )
-
-    df["actual_departure_datetime"] = (
-        df["scheduled_departure_datetime"]
-        + pd.to_timedelta(df["dep_delay"], unit="m")
-    )
-
-    arr_time_col = get_first_existing_column(df, [
-        "crs_arr_time",
-        "scheduled_arrival",
-        "scheduled_arrival_time"
-    ])
-
-    if arr_time_col:
-        df["scheduled_arrival_datetime"] = df.apply(
-            lambda row: make_datetime(row["fl_date"], row[arr_time_col]),
-            axis=1
-        )
-    else:
-        df["scheduled_arrival_datetime"] = df["scheduled_departure_datetime"]
-
-    df["actual_arrival_datetime"] = (
-        df["scheduled_arrival_datetime"]
-        + pd.to_timedelta(df["arr_delay"], unit="m")
-    )
-
-    df["delay_cause_type"] = df.apply(classify_delay_cause, axis=1)
-    df["delay_cause_detail"] = df["delay_cause_type"]
-
-    df["is_controllable"] = df["delay_cause_type"].isin([
-        "Airline",
-        "Late Aircraft",
-        "Technical"
-    ])
-
-    df["weather_type"] = np.where(
-        df["delay_cause_type"] == "Weather",
-        "Weather Delay",
-        "Unknown"
-    )
-
-    df["temperature"] = 0
-    df["wind_speed"] = 0
-    df["visibility"] = 0
-
-    tail_col = get_first_existing_column(df, [
-        "tail_num",
-        "tail_number"
-    ])
-
-    if tail_col:
-        df["tail_number"] = df[tail_col].astype(str).str.strip()
-    else:
-        df["tail_number"] = "Unknown"
-
-    df["aircraft_model"] = "Unknown"
-    df["manufacturer"] = "Unknown"
-    df["seating_capacity"] = 0
-    df["aircraft_category"] = "Unknown"
-
-    df["passengers"] = 0
+    fact_flightperformance["flight_number"] = fact_flightperformance["flight_number"].astype(str)
 
     print("Transform complete.")
-    return df
 
-
-def build_dimensions(df):
-    airlines_lookup = extract_airlines_lookup()
-    airports_lookup = extract_airports_lookup()
-
-    dim_date = df[["date_id", "fl_date"]].drop_duplicates().copy()
-    dim_date["day"] = dim_date["fl_date"].dt.day
-    dim_date["month"] = dim_date["fl_date"].dt.month
-    dim_date["year"] = dim_date["fl_date"].dt.year
-    dim_date = dim_date.rename(columns={"fl_date": "full_date"})
-    dim_date = dim_date[["date_id", "full_date", "day", "month", "year"]]
-
-    dim_time = df[["time_id", "hour", "minute", "time_of_day"]].drop_duplicates().copy()
-
-    dim_airline = df[["airline_code"]].drop_duplicates().copy()
-
-    if not airlines_lookup.empty:
-        dim_airline = dim_airline.merge(
-            airlines_lookup,
-            on="airline_code",
-            how="left"
-        )
-        dim_airline["airline_name"] = dim_airline["airline_name"].fillna(dim_airline["airline_code"])
-    else:
-        dim_airline["airline_name"] = dim_airline["airline_code"]
-
-    dim_airline = dim_airline.sort_values("airline_code").reset_index(drop=True)
-    dim_airline["airline_id"] = dim_airline.index + 1
-    dim_airline = dim_airline[["airline_id", "airline_code", "airline_name"]]
-
-    airports = pd.concat([
-        df[["origin"]].rename(columns={"origin": "airport_code"}),
-        df[["dest"]].rename(columns={"dest": "airport_code"})
-    ]).drop_duplicates()
-
-    if not airports_lookup.empty:
-        dim_airport = airports.merge(
-            airports_lookup,
-            on="airport_code",
-            how="left"
-        )
-    else:
-        dim_airport = airports.copy()
-        dim_airport["airport_name"] = dim_airport["airport_code"]
-        dim_airport["airport_city"] = "Unknown"
-        dim_airport["airport_country"] = "United States"
-        dim_airport["airport_continent"] = "North America"
-        dim_airport["airport_elevation"] = 0
-        dim_airport["airport_type"] = "Unknown"
-
-    dim_airport["airport_name"] = dim_airport["airport_name"].fillna(dim_airport["airport_code"])
-    dim_airport["airport_city"] = dim_airport["airport_city"].fillna("Unknown")
-    dim_airport["airport_country"] = dim_airport["airport_country"].fillna("United States")
-    dim_airport["airport_continent"] = dim_airport["airport_continent"].fillna("North America")
-    dim_airport["airport_elevation"] = dim_airport["airport_elevation"].fillna(0)
-    dim_airport["airport_type"] = dim_airport["airport_type"].fillna("Unknown")
-
-    dim_airport = dim_airport.sort_values("airport_code").reset_index(drop=True)
-    dim_airport["airport_id"] = dim_airport.index + 1
-
-    dim_airport = dim_airport[[
-        "airport_id",
-        "airport_code",
-        "airport_name",
-        "airport_city",
-        "airport_country",
-        "airport_continent",
-        "airport_elevation",
-        "airport_type"
-    ]]
-
-    dim_weather = df[[
-        "weather_type",
-        "temperature",
-        "wind_speed",
-        "visibility"
-    ]].drop_duplicates().reset_index(drop=True)
-
-    dim_weather["weather_id"] = dim_weather.index + 1
-
-    dim_weather = dim_weather[[
-        "weather_id",
-        "weather_type",
-        "temperature",
-        "wind_speed",
-        "visibility"
-    ]]
-
-    dim_flight = df[[
-        "flight_number",
-        "flight_type",
-        "route_category",
-        "route_distance"
-    ]].drop_duplicates().reset_index(drop=True)
-
-    dim_flight["flight_id"] = dim_flight.index + 1
-
-    dim_flight = dim_flight[[
-        "flight_id",
-        "flight_number",
-        "flight_type",
-        "route_category",
-        "route_distance"
-    ]]
-
-    dim_aircraft = df[[
-        "tail_number",
-        "aircraft_model",
-        "manufacturer",
-        "seating_capacity",
-        "aircraft_category"
-    ]].drop_duplicates().reset_index(drop=True)
-
-    dim_aircraft["aircraft_id"] = dim_aircraft.index + 1
-
-    dim_aircraft = dim_aircraft[[
-        "aircraft_id",
-        "tail_number",
-        "aircraft_model",
-        "manufacturer",
-        "seating_capacity",
-        "aircraft_category"
-    ]]
-
-    dim_delay_cause = df[[
-        "delay_cause_type",
-        "delay_cause_detail",
-        "is_controllable"
-    ]].drop_duplicates().reset_index(drop=True)
-
-    dim_delay_cause["delay_cause_id"] = dim_delay_cause.index + 1
-
-    dim_delay_cause = dim_delay_cause[[
-        "delay_cause_id",
-        "delay_cause_type",
-        "delay_cause_detail",
-        "is_controllable"
-    ]]
-
-    dimensions = {
-        "dim_date": dim_date,
-        "dim_time": dim_time,
+    return {
         "dim_airline": dim_airline,
         "dim_airport": dim_airport,
-        "dim_weather_condition": dim_weather,
+        "dim_date": dim_date,
+        "dim_time": dim_time,
         "dim_flight": dim_flight,
         "dim_aircraft": dim_aircraft,
-        "dim_delay_cause": dim_delay_cause
+        "dim_weather_condition": dim_weather_condition,
+        "dim_delay_cause": dim_delay_cause,
+        "fact_flightperformance": fact_flightperformance
     }
-
-    for table_name, table_df in dimensions.items():
-        table_df.to_csv(PROCESSED_DIR / f"{table_name}.csv", index=False)
-
-    print("Dimension tables created and saved to data/processed/.")
-    return dimensions
-
-
-def build_fact_table(df, dimensions):
-    airline_map = dict(zip(
-        dimensions["dim_airline"]["airline_code"],
-        dimensions["dim_airline"]["airline_id"]
-    ))
-
-    airport_map = dict(zip(
-        dimensions["dim_airport"]["airport_code"],
-        dimensions["dim_airport"]["airport_id"]
-    ))
-
-    weather_map = dict(zip(
-        dimensions["dim_weather_condition"]["weather_type"],
-        dimensions["dim_weather_condition"]["weather_id"]
-    ))
-
-    flight_map = dict(zip(
-        dimensions["dim_flight"]["flight_number"],
-        dimensions["dim_flight"]["flight_id"]
-    ))
-
-    aircraft_map = dict(zip(
-        dimensions["dim_aircraft"]["tail_number"],
-        dimensions["dim_aircraft"]["aircraft_id"]
-    ))
-
-    delay_map = dict(zip(
-        dimensions["dim_delay_cause"]["delay_cause_type"],
-        dimensions["dim_delay_cause"]["delay_cause_id"]
-    ))
-
-    fact = pd.DataFrame()
-
-    fact["date_id"] = df["date_id"]
-    fact["time_id"] = df["time_id"]
-    fact["origin_airport_id"] = df["origin"].map(airport_map)
-    fact["destination_airport_id"] = df["dest"].map(airport_map)
-    fact["airline_id"] = df["airline_code"].map(airline_map)
-    fact["weather_id"] = df["weather_type"].map(weather_map)
-    fact["flight_id"] = df["flight_number"].map(flight_map)
-    fact["aircraft_id"] = df["tail_number"].map(aircraft_map)
-    fact["delay_cause_id"] = df["delay_cause_type"].map(delay_map)
-    fact["delay_minutes"] = df["delay_minutes"]
-    fact["cancellation_flag"] = df["cancellation_flag"]
-    fact["passengers"] = df["passengers"]
-    fact["scheduled_departure_datetime"] = df["scheduled_departure_datetime"]
-    fact["actual_departure_datetime"] = df["actual_departure_datetime"]
-    fact["scheduled_arrival_datetime"] = df["scheduled_arrival_datetime"]
-    fact["actual_arrival_datetime"] = df["actual_arrival_datetime"]
-    fact["delay_status"] = df["delay_status"]
-
-    fact = fact.dropna(subset=[
-        "date_id",
-        "time_id",
-        "origin_airport_id",
-        "destination_airport_id",
-        "airline_id",
-        "weather_id",
-        "flight_id",
-        "aircraft_id",
-        "delay_cause_id"
-    ])
-
-    fact.to_csv(PROCESSED_DIR / "fact_flightperformance.csv", index=False)
-
-    print("Fact table created and saved to data/processed/.")
-    return fact
