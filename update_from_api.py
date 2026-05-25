@@ -4,6 +4,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+from api.aviation_stack_api import get_live_flights
 from database.create_tables import create_tables
 from database.db_config import engine
 
@@ -205,20 +206,18 @@ def upsert_api_fact_record(conn, record):
 
 
 def parse_api_record(item):
-    flight = item.get("flight") or {}
-    airline = item.get("airline") or {}
-    departure = item.get("departure") or {}
-    arrival = item.get("arrival") or {}
+    flight_number = item.get("flight_number")
+    airline_code = item.get("airline_code")
+    airline_name = item.get("airline_name")
 
-    flight_number = flight.get("iata") or flight.get("icao")
-    airline_code = airline.get("iata") or airline.get("icao")
-    airline_name = airline.get("name")
+    origin_airport_code = item.get("origin_airport_code")
+    origin_airport_name = item.get("origin_airport_name")
 
-    origin_airport_code = departure.get("iata") or departure.get("icao")
-    destination_airport_code = arrival.get("iata") or arrival.get("icao")
+    destination_airport_code = item.get("destination_airport_code")
+    destination_airport_name = item.get("destination_airport_name")
 
-    scheduled_raw = departure.get("scheduled")
-    actual_raw = departure.get("actual")
+    scheduled_raw = item.get("scheduled_departure_datetime")
+    actual_raw = item.get("actual_departure_datetime")
 
     if not flight_number or not airline_code or not origin_airport_code or not destination_airport_code:
         return None
@@ -232,7 +231,7 @@ def parse_api_record(item):
     scheduled_departure_time = clean_api_time(scheduled_raw)
     actual_departure_time = clean_api_time(actual_raw)
 
-    delay_minutes = departure.get("delay") or 0
+    delay_minutes = item.get("departure_delay_minutes_live") or 0
     is_delayed = delay_minutes > 15
 
     return {
@@ -240,9 +239,9 @@ def parse_api_record(item):
         "airline_code": airline_code,
         "airline_name": airline_name or "Unknown",
         "origin_airport_code": origin_airport_code,
-        "origin_airport_name": departure.get("airport") or "Unknown",
+        "origin_airport_name": origin_airport_name or "Unknown",
         "destination_airport_code": destination_airport_code,
-        "destination_airport_name": arrival.get("airport") or "Unknown",
+        "destination_airport_name": destination_airport_name or "Unknown",
         "flight_date": flight_date,
         "scheduled_departure_time": scheduled_departure_time,
         "actual_departure_time": actual_departure_time,
@@ -250,7 +249,7 @@ def parse_api_record(item):
         "weather_condition": "Unknown",
         "delay_cause": "None",
         "delay_minutes": int(delay_minutes),
-        "is_delayed": bool(is_delayed)
+        "is_delayed": bool(is_delayed),
     }
 
 
@@ -259,7 +258,7 @@ def main():
 
     create_tables()
 
-    api_items = fetch_api_flights(limit=100)
+    api_items = get_live_flights(max_rows=2000, page_size=100)
 
     inserted_count = 0
     skipped_count = 0
@@ -270,6 +269,7 @@ def main():
 
             if record is None:
                 skipped_count += 1
+
                 continue
 
             ensure_dimension_values(conn, record)

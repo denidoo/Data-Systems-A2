@@ -5,8 +5,8 @@ from sqlalchemy import text
 
 from database.db_config import engine
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = PROJECT_ROOT / "models" / "flight_delay_model.pkl"
 
 
@@ -21,13 +21,6 @@ def load_model():
 
 
 def build_full_dataset_for_lookup():
-    """
-    Builds a joined dataset from the PostgreSQL warehouse.
-
-    This is used by the app to populate dropdowns and to find historical
-    records for flight/date lookup.
-    """
-
     query = """
         SELECT
             fp.flight_performance_id,
@@ -36,6 +29,8 @@ def build_full_dataset_for_lookup():
             dd.day,
             dd.month,
             dd.year,
+            dd.day_of_week,
+            dd.is_weekend,
 
             dt.hour,
             dt.minute,
@@ -102,7 +97,7 @@ def build_full_dataset_for_lookup():
             ON fp.date_id = dd.date_id
 
         LEFT JOIN dim_time dt
-            ON fp.time_id = dt.time_id
+            ON fp.scheduled_departure_time_id = dt.time_id
 
         LEFT JOIN dim_airport oa
             ON fp.origin_airport_id = oa.airport_id
@@ -126,16 +121,32 @@ def build_full_dataset_for_lookup():
             ON fp.delay_cause_id = dc.delay_cause_id;
     """
 
-    return pd.read_sql(query, engine)
+    df = pd.read_sql(query, engine)
+
+    if "month" in df.columns:
+        df["quarter"] = df["month"].apply(
+            lambda x: ((int(x) - 1) // 3) + 1 if pd.notna(x) else 1
+        )
+
+    return df
+
+
+def load_available_flights():
+    df = build_full_dataset_for_lookup()
+
+    if "flight_number" not in df.columns:
+        return pd.DataFrame(columns=["flight_number"])
+
+    return (
+        df[["flight_number"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values("flight_number")
+        .reset_index(drop=True)
+    )
 
 
 def get_latest_api_features(flight_number):
-    """
-    Reads the most recent Aviationstack API row already stored in the warehouse.
-
-    This replaces direct API calls during prediction.
-    """
-
     query = text("""
         SELECT
             fp.api_source,
@@ -155,22 +166,23 @@ def get_latest_api_features(flight_number):
             fp.api_destination_delayed_arrivals_count,
             fp.api_destination_avg_departure_delay,
             fp.api_destination_avg_arrival_delay
+
         FROM fact_flightperformance fp
-        JOIN dim_flight fl
+
+        LEFT JOIN dim_flight fl
             ON fp.flight_id = fl.flight_id
-        WHERE fl.flight_number = :flight_number
-        AND fp.api_source = 'Aviationstack'
-        ORDER BY fp.api_pull_timestamp DESC
+
+        WHERE UPPER(fl.flight_number) = :flight_number
+
+        ORDER BY fp.api_pull_timestamp DESC NULLS LAST
         LIMIT 1;
     """)
 
     with engine.connect() as conn:
-        result = conn.execute(
+        row = conn.execute(
             query,
             {"flight_number": flight_number.upper()}
-        )
-
-        row = result.fetchone()
+        ).fetchone()
 
     if row is None:
         return {
@@ -189,23 +201,17 @@ def get_latest_api_features(flight_number):
             "api_destination_delayed_departures_count": 0,
             "api_destination_delayed_arrivals_count": 0,
             "api_destination_avg_departure_delay": 0,
-            "api_destination_avg_arrival_delay": 0
+            "api_destination_avg_arrival_delay": 0,
         }
 
     return dict(row._mapping)
 
 
 def get_historical_flight_features(flight_number, selected_date=None):
-    """
-    Finds the closest historical record for the selected flight.
-
-    Uses the most recent historical record for the flight number,
-    then overrides date-based features using the selected future date.
-    """
-
     query = text("""
         SELECT
-            fp.*,
+            fp.flight_performance_id,
+
             dd.full_date,
             dd.day,
             dd.month,
@@ -222,15 +228,15 @@ def get_historical_flight_features(flight_number, selected_date=None):
 
             al.airline_code,
 
-            fl.flight_number,
-            fl.flight_type,
-            fl.route_category,
-            fl.route_distance,
-
             wc.weather_type,
             wc.temperature,
             wc.wind_speed,
             wc.visibility,
+
+            fl.flight_number,
+            fl.flight_type,
+            fl.route_category,
+            fl.route_distance,
 
             ac.aircraft_model,
             ac.manufacturer,
@@ -238,7 +244,17 @@ def get_historical_flight_features(flight_number, selected_date=None):
             ac.aircraft_category,
 
             dc.delay_cause_type,
-            dc.is_controllable
+            dc.delay_cause_detail,
+            dc.is_controllable,
+
+            fp.delay_minutes,
+            fp.cancellation_flag,
+            fp.passengers,
+            fp.scheduled_departure_datetime,
+            fp.actual_departure_datetime,
+            fp.scheduled_arrival_datetime,
+            fp.actual_arrival_datetime,
+            fp.delay_status
 
         FROM fact_flightperformance fp
 
@@ -246,7 +262,7 @@ def get_historical_flight_features(flight_number, selected_date=None):
             ON fp.date_id = dd.date_id
 
         LEFT JOIN dim_time dt
-            ON fp.time_id = dt.time_id
+            ON fp.scheduled_departure_time_id = dt.time_id
 
         LEFT JOIN dim_airport oa
             ON fp.origin_airport_id = oa.airport_id
@@ -257,11 +273,11 @@ def get_historical_flight_features(flight_number, selected_date=None):
         LEFT JOIN dim_airline al
             ON fp.airline_id = al.airline_id
 
-        LEFT JOIN dim_flight fl
-            ON fp.flight_id = fl.flight_id
-
         LEFT JOIN dim_weather_condition wc
             ON fp.weather_id = wc.weather_id
+
+        LEFT JOIN dim_flight fl
+            ON fp.flight_id = fl.flight_id
 
         LEFT JOIN dim_aircraft ac
             ON fp.aircraft_id = ac.aircraft_id
@@ -269,30 +285,22 @@ def get_historical_flight_features(flight_number, selected_date=None):
         LEFT JOIN dim_delay_cause dc
             ON fp.delay_cause_id = dc.delay_cause_id
 
-        WHERE fl.flight_number = :flight_number
+        WHERE UPPER(fl.flight_number) = :flight_number
 
-        ORDER BY dd.full_date DESC
-
+        ORDER BY dd.full_date DESC NULLS LAST
         LIMIT 1;
     """)
 
-    params = {
-        "flight_number": flight_number.upper()
-    }
-
     with engine.connect() as conn:
-        result = conn.execute(query, params)
-        row = result.fetchone()
+        row = conn.execute(
+            query,
+            {"flight_number": flight_number.upper()}
+        ).fetchone()
 
     if row is None:
         return None
 
     historical = dict(row._mapping)
-
-    if historical.get("month") is not None:
-        historical["quarter"] = ((historical["month"] - 1) // 3) + 1
-    else:
-        historical["quarter"] = 1
 
     if selected_date is not None:
         selected_date = pd.to_datetime(selected_date)
@@ -304,18 +312,20 @@ def get_historical_flight_features(flight_number, selected_date=None):
         historical["quarter"] = selected_date.quarter
         historical["day_of_week"] = selected_date.dayofweek
         historical["is_weekend"] = selected_date.dayofweek in [5, 6]
+    else:
+        historical["quarter"] = (
+            ((int(historical["month"]) - 1) // 3) + 1
+            if historical.get("month") is not None
+            else 1
+        )
 
     return historical
 
 
 def build_prediction_input(flight_number, selected_date=None):
-    """
-    Combines historical warehouse features with the latest stored API features.
-    """
-
     historical = get_historical_flight_features(
-        flight_number,
-        selected_date
+        flight_number=flight_number,
+        selected_date=selected_date
     )
 
     if historical is None:
@@ -330,16 +340,10 @@ def build_prediction_input(flight_number, selected_date=None):
         **api_features
     }
 
-    input_df = pd.DataFrame([combined])
-
-    return input_df
+    return pd.DataFrame([combined])
 
 
 def clean_model_input(input_df, model):
-    """
-    Aligns the prediction input with the trained model's expected columns.
-    """
-
     if hasattr(model, "feature_names_in_"):
         expected_columns = list(model.feature_names_in_)
 
@@ -368,19 +372,25 @@ def predict_from_details(flight_number, selected_date=None, flight_date=None):
     prediction = model.predict(model_input)[0]
 
     probability = None
-
     if hasattr(model, "predict_proba"):
         probability = model.predict_proba(model_input)[0].max()
 
-    result = {
+    return {
         "flight_number": flight_number.upper(),
-        "prediction": prediction,
+        "prediction": int(prediction),
         "prediction_label": "Delayed" if int(prediction) == 1 else "On Time",
         "probability": probability,
-        "used_api_data": input_df.iloc[0].get("api_source") == "Aviationstack",
-        "api_live_flight_status": input_df.iloc[0].get("api_live_flight_status", "Unknown"),
-        "api_departure_delay_minutes": input_df.iloc[0].get("api_departure_delay_minutes", 0),
-        "api_arrival_delay_minutes": input_df.iloc[0].get("api_arrival_delay_minutes", 0)
+        "used_api_data": input_df.iloc[0].get("api_source") not in [None, "None"],
+        "api_live_flight_status": input_df.iloc[0].get(
+            "api_live_flight_status",
+            "Unknown"
+        ),
+        "api_departure_delay_minutes": input_df.iloc[0].get(
+            "api_departure_delay_minutes",
+            0
+        ),
+        "api_arrival_delay_minutes": input_df.iloc[0].get(
+            "api_arrival_delay_minutes",
+            0
+        ),
     }
-
-    return result
