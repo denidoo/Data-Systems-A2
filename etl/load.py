@@ -1,6 +1,6 @@
 from sqlalchemy import text
 from database.db_config import engine
-
+import pandas as pd
 
 def insert_dataframe_ignore_duplicates(conn, df, table_name, columns, conflict_column):
     for _, row in df.iterrows():
@@ -158,17 +158,68 @@ def load_fact_table(data):
         for _, row in fact_df.iterrows():
             values = {
                 "flight_number": str(row["flight_number"]),
-                "airline_code": row["airline"],
-                "origin_airport": row["origin_airport"],
-                "destination_airport": row["destination_airport"],
+
+                "airline_code": (
+                    "Unknown"
+                    if pd.isna(row["airline"])
+                    else str(row["airline"])
+                ),
+
+                "origin_airport": (
+                    "Unknown"
+                    if pd.isna(row["origin_airport"])
+                    else str(row["origin_airport"])
+                ),
+
+                "destination_airport": (
+                    "Unknown"
+                    if pd.isna(row["destination_airport"])
+                    else str(row["destination_airport"])
+                ),
+
                 "flight_date": row["flight_date"],
-                "scheduled_departure_time": row["scheduled_departure_time"],
-                "actual_departure_time": row["actual_departure_time"],
-                "aircraft_type": row["aircraft_type"],
-                "weather_condition": row["weather_condition"],
-                "delay_cause": row["delay_cause"],
-                "delay_minutes": int(row["delay_minutes"]),
-                "is_delayed": bool(row["is_delayed"])
+
+                "scheduled_departure_time": (
+                    None
+                    if pd.isna(row["scheduled_departure_time"])
+                    else row["scheduled_departure_time"]
+                ),
+
+                "actual_departure_time": (
+                    None
+                    if pd.isna(row["actual_departure_time"])
+                    else row["actual_departure_time"]
+                ),
+
+                "aircraft_type": (
+                    "Unknown"
+                    if pd.isna(row["aircraft_type"])
+                    else str(row["aircraft_type"])
+                ),
+
+                "weather_condition": (
+                    "Unknown"
+                    if pd.isna(row["weather_condition"])
+                    else str(row["weather_condition"])
+                ),
+
+                "delay_cause": (
+                    "None"
+                    if pd.isna(row["delay_cause"])
+                    else str(row["delay_cause"])
+                ),
+
+                "delay_minutes": (
+                    0
+                    if pd.isna(row["delay_minutes"])
+                    else int(row["delay_minutes"])
+                ),
+
+                "is_delayed": (
+                    False
+                    if pd.isna(row["is_delayed"])
+                    else bool(row["is_delayed"])
+                ),
             }
 
             conn.execute(query, values)

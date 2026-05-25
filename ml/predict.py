@@ -5,15 +5,16 @@ from sqlalchemy import text
 
 from database.db_config import engine
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MODEL_PATH = PROJECT_ROOT / "models" / "best_model.pkl"
+MODEL_PATH = PROJECT_ROOT / "models" / "flight_delay_model.pkl"
 
 
 def load_model():
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
-            "Model file not found. Run `python -m ml.train_model` first."
+            f"Model file not found at {MODEL_PATH}. "
+            "Run `python -m ml.train_model` first."
         )
 
     return joblib.load(MODEL_PATH)
@@ -198,122 +199,86 @@ def get_historical_flight_features(flight_number, selected_date=None):
     """
     Finds the closest historical record for the selected flight.
 
-    If the selected date exists in the warehouse, it uses that.
-    Otherwise, it falls back to the most recent matching flight number.
+    Uses the most recent historical record for the flight number,
+    then overrides date-based features using the selected future date.
     """
 
-    if selected_date is not None:
-        query = text("""
-            SELECT
-                fp.*,
-                dd.full_date,
-                dd.day,
-                dd.month,
-                dd.year,
-                dt.hour,
-                dt.minute,
-                dt.time_of_day,
-                oa.airport_code AS origin_airport_code,
-                da.airport_code AS destination_airport_code,
-                al.airline_code,
-                fl.flight_number,
-                fl.flight_type,
-                fl.route_category,
-                fl.route_distance,
-                wc.weather_type,
-                wc.temperature,
-                wc.wind_speed,
-                wc.visibility,
-                ac.aircraft_model,
-                ac.manufacturer,
-                ac.seating_capacity,
-                ac.aircraft_category,
-                dc.delay_cause_type,
-                dc.is_controllable
-            FROM fact_flightperformance fp
-            LEFT JOIN dim_date dd
-                ON fp.date_id = dd.date_id
-            LEFT JOIN dim_time dt
-                ON fp.time_id = dt.time_id
-            LEFT JOIN dim_airport oa
-                ON fp.origin_airport_id = oa.airport_id
-            LEFT JOIN dim_airport da
-                ON fp.destination_airport_id = da.airport_id
-            LEFT JOIN dim_airline al
-                ON fp.airline_id = al.airline_id
-            LEFT JOIN dim_flight fl
-                ON fp.flight_id = fl.flight_id
-            LEFT JOIN dim_weather_condition wc
-                ON fp.weather_id = wc.weather_id
-            LEFT JOIN dim_aircraft ac
-                ON fp.aircraft_id = ac.aircraft_id
-            LEFT JOIN dim_delay_cause dc
-                ON fp.delay_cause_id = dc.delay_cause_id
-            WHERE fl.flight_number = :flight_number
-            AND dd.full_date = :selected_date
-            LIMIT 1;
-        """)
+    query = text("""
+        SELECT
+            fp.*,
+            dd.full_date,
+            dd.day,
+            dd.month,
+            dd.year,
+            dd.day_of_week,
+            dd.is_weekend,
 
-        params = {
-            "flight_number": flight_number.upper(),
-            "selected_date": selected_date
-        }
+            dt.hour,
+            dt.minute,
+            dt.time_of_day,
 
-    else:
-        query = text("""
-            SELECT
-                fp.*,
-                dd.full_date,
-                dd.day,
-                dd.month,
-                dd.year,
-                dt.hour,
-                dt.minute,
-                dt.time_of_day,
-                oa.airport_code AS origin_airport_code,
-                da.airport_code AS destination_airport_code,
-                al.airline_code,
-                fl.flight_number,
-                fl.flight_type,
-                fl.route_category,
-                fl.route_distance,
-                wc.weather_type,
-                wc.temperature,
-                wc.wind_speed,
-                wc.visibility,
-                ac.aircraft_model,
-                ac.manufacturer,
-                ac.seating_capacity,
-                ac.aircraft_category,
-                dc.delay_cause_type,
-                dc.is_controllable
-            FROM fact_flightperformance fp
-            LEFT JOIN dim_date dd
-                ON fp.date_id = dd.date_id
-            LEFT JOIN dim_time dt
-                ON fp.time_id = dt.time_id
-            LEFT JOIN dim_airport oa
-                ON fp.origin_airport_id = oa.airport_id
-            LEFT JOIN dim_airport da
-                ON fp.destination_airport_id = da.airport_id
-            LEFT JOIN dim_airline al
-                ON fp.airline_id = al.airline_id
-            LEFT JOIN dim_flight fl
-                ON fp.flight_id = fl.flight_id
-            LEFT JOIN dim_weather_condition wc
-                ON fp.weather_id = wc.weather_id
-            LEFT JOIN dim_aircraft ac
-                ON fp.aircraft_id = ac.aircraft_id
-            LEFT JOIN dim_delay_cause dc
-                ON fp.delay_cause_id = dc.delay_cause_id
-            WHERE fl.flight_number = :flight_number
-            ORDER BY dd.full_date DESC
-            LIMIT 1;
-        """)
+            oa.airport_code AS origin_airport_code,
+            da.airport_code AS destination_airport_code,
 
-        params = {
-            "flight_number": flight_number.upper()
-        }
+            al.airline_code,
+
+            fl.flight_number,
+            fl.flight_type,
+            fl.route_category,
+            fl.route_distance,
+
+            wc.weather_type,
+            wc.temperature,
+            wc.wind_speed,
+            wc.visibility,
+
+            ac.aircraft_model,
+            ac.manufacturer,
+            ac.seating_capacity,
+            ac.aircraft_category,
+
+            dc.delay_cause_type,
+            dc.is_controllable
+
+        FROM fact_flightperformance fp
+
+        LEFT JOIN dim_date dd
+            ON fp.date_id = dd.date_id
+
+        LEFT JOIN dim_time dt
+            ON fp.time_id = dt.time_id
+
+        LEFT JOIN dim_airport oa
+            ON fp.origin_airport_id = oa.airport_id
+
+        LEFT JOIN dim_airport da
+            ON fp.destination_airport_id = da.airport_id
+
+        LEFT JOIN dim_airline al
+            ON fp.airline_id = al.airline_id
+
+        LEFT JOIN dim_flight fl
+            ON fp.flight_id = fl.flight_id
+
+        LEFT JOIN dim_weather_condition wc
+            ON fp.weather_id = wc.weather_id
+
+        LEFT JOIN dim_aircraft ac
+            ON fp.aircraft_id = ac.aircraft_id
+
+        LEFT JOIN dim_delay_cause dc
+            ON fp.delay_cause_id = dc.delay_cause_id
+
+        WHERE fl.flight_number = :flight_number
+
+        ORDER BY dd.full_date DESC
+
+        LIMIT 1;
+    """)
+
+    params = {
+        "flight_number": flight_number.upper()
+    }
 
     with engine.connect() as conn:
         result = conn.execute(query, params)
@@ -322,7 +287,25 @@ def get_historical_flight_features(flight_number, selected_date=None):
     if row is None:
         return None
 
-    return dict(row._mapping)
+    historical = dict(row._mapping)
+
+    if historical.get("month") is not None:
+        historical["quarter"] = ((historical["month"] - 1) // 3) + 1
+    else:
+        historical["quarter"] = 1
+
+    if selected_date is not None:
+        selected_date = pd.to_datetime(selected_date)
+
+        historical["full_date"] = selected_date
+        historical["day"] = selected_date.day
+        historical["month"] = selected_date.month
+        historical["year"] = selected_date.year
+        historical["quarter"] = selected_date.quarter
+        historical["day_of_week"] = selected_date.dayofweek
+        historical["is_weekend"] = selected_date.dayofweek in [5, 6]
+
+    return historical
 
 
 def build_prediction_input(flight_number, selected_date=None):
@@ -369,12 +352,9 @@ def clean_model_input(input_df, model):
     return input_df
 
 
-def predict_from_details(flight_number, selected_date=None):
-    """
-    Main prediction function used by app.py.
-
-    It now reads API values from PostgreSQL instead of calling Aviationstack live.
-    """
+def predict_from_details(flight_number, selected_date=None, flight_date=None):
+    if selected_date is None and flight_date is not None:
+        selected_date = flight_date
 
     model = load_model()
 

@@ -11,13 +11,19 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neural_network import MLPClassifier
 
-from ml.feature_engineering import build_training_dataset, prepare_features, get_feature_columns
+from ml.feature_engineering import (
+    build_training_dataset,
+    prepare_features,
+    get_feature_columns
+)
 
 
-MODEL_DIR = Path("ml/models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-MODEL_PATH = MODEL_DIR / "best_flight_delay_model.pkl"
+MODEL_DIR = PROJECT_ROOT / "models"
+MODEL_DIR.mkdir(exist_ok=True)
+
+MODEL_PATH = MODEL_DIR / "flight_delay_model.pkl"
 
 
 def build_preprocessor():
@@ -103,7 +109,10 @@ def train_models():
     X, y = prepare_features(df)
 
     if y.nunique() < 2:
-        raise ValueError("Target column only has one class. Model needs both delayed and not delayed records.")
+        raise ValueError(
+            "Target column only has one class. "
+            "Model needs both delayed and not delayed records."
+        )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -155,7 +164,13 @@ def train_models():
             best_model = pipeline
             best_model_name = model_name
 
-    results_df = pd.DataFrame(results).sort_values(by="f1_score", ascending=False)
+    if best_model is None:
+        raise RuntimeError("No model was trained successfully.")
+
+    results_df = pd.DataFrame(results).sort_values(
+        by="f1_score",
+        ascending=False
+    )
 
     print("\nModel Comparison:")
     print(results_df)
@@ -172,7 +187,8 @@ def train_models():
 def load_model():
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
-            f"No trained model found at {MODEL_PATH}. Run ml/model.py first."
+            f"No trained model found at {MODEL_PATH}. "
+            "Run `python -m ml.train_model` first."
         )
 
     return joblib.load(MODEL_PATH)
@@ -182,7 +198,10 @@ def predict_delay(input_df):
     model = load_model()
 
     prediction = model.predict(input_df)
-    prediction_probability = model.predict_proba(input_df)
+
+    prediction_probability = None
+    if hasattr(model, "predict_proba"):
+        prediction_probability = model.predict_proba(input_df)
 
     return prediction, prediction_probability
 

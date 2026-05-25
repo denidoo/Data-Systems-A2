@@ -43,7 +43,7 @@ def transform_data(raw_data):
     airports.columns = airports.columns.str.lower()
 
     # Limit data size if needed while testing
-    # flights = flights.head(100000)
+    flights = flights.head(100000)
 
     flights["flight_date"] = pd.to_datetime(
         flights[["year", "month", "day"]]

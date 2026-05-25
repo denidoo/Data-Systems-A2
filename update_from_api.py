@@ -4,8 +4,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from create_tables import create_tables
-from db_config import engine
+from database.create_tables import create_tables
+from database.db_config import engine
 
 load_dotenv()
 
@@ -22,7 +22,7 @@ def clean_api_time(value):
         return None
 
 
-def fetch_api_flights(limit=100):
+def fetch_api_flights(limit=2000):
     if not AVIATIONSTACK_API_KEY:
         raise ValueError("AVIATIONSTACK_API_KEY is missing from .env")
 
