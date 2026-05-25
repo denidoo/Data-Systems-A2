@@ -17,7 +17,22 @@ st.subheader("Flight Delay Prediction System")
 @st.cache_data(ttl=60)
 def load_available_flights():
     df = build_full_dataset_for_lookup()
-    df["flight_number"] = df["flight_number"].astype(str)
+
+    # Convert to string and clean
+    df["flight_number"] = (
+        df["flight_number"]
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+
+    # Remove invalid flight numbers
+    df = df[
+        df["flight_number"].str.match(
+            r"^[A-Z]{2,3}[0-9]{1,4}$",
+            na=False
+        )
+    ]
 
     available_flights = (
         df[
@@ -35,7 +50,6 @@ def load_available_flights():
     )
 
     return available_flights
-
 
 def safe_get(df, column, default="Unknown"):
     if column in df.columns:

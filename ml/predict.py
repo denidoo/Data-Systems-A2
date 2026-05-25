@@ -1,7 +1,7 @@
 import joblib
 import pandas as pd
 from pathlib import Path
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from database.db_config import engine
 
@@ -13,84 +13,96 @@ MODEL_PATH = PROJECT_ROOT / "models" / "flight_delay_model.pkl"
 def load_model():
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
-            f"Model file not found at {MODEL_PATH}. "
-            "Run `python -m ml.train_model` first."
+            f"Model not found at {MODEL_PATH}. Run: python -m ml.train_model"
         )
-
     return joblib.load(MODEL_PATH)
 
 
+def get_columns(table_name):
+    inspector = inspect(engine)
+    return [col["name"] for col in inspector.get_columns(table_name)]
+
+
+def first_existing(columns, options):
+    for option in options:
+        if option in columns:
+            return option
+    return None
+
+
 def build_full_dataset_for_lookup():
-    query = """
+    fact_cols = get_columns("fact_flightperformance")
+    date_cols = get_columns("dim_date")
+    time_cols = get_columns("dim_time")
+    airport_cols = get_columns("dim_airport")
+    airline_cols = get_columns("dim_airline")
+    flight_cols = get_columns("dim_flight")
+    aircraft_cols = get_columns("dim_aircraft")
+    delay_cols = get_columns("dim_delay_cause")
+
+    weather_cols = []
+    try:
+        weather_cols = get_columns("dim_weather_condition")
+    except Exception:
+        pass
+
+    weather_pk = first_existing(weather_cols, ["weather_condition_id", "weather_id"])
+
+    select_parts = [
+        "fp.flight_performance_id",
+        "fp.delay_minutes",
+        "fp.is_delayed",
+        "fp.created_at",
+        "fp.updated_at",
+    ]
+
+    # Date fields
+    for col in ["full_date", "day", "month", "year", "day_of_week", "is_weekend"]:
+        if col in date_cols:
+            select_parts.append(f"dd.{col}")
+
+    # Time fields
+    for col in ["hour", "minute", "time_of_day"]:
+        if col in time_cols:
+            select_parts.append(f"dt.{col}")
+
+    # Airports
+    if "airport_code" in airport_cols:
+        select_parts.append("oa.airport_code AS origin_airport_code")
+        select_parts.append("da.airport_code AS destination_airport_code")
+
+    if "airport_name" in airport_cols:
+        select_parts.append("oa.airport_name AS origin_airport_name")
+        select_parts.append("da.airport_name AS destination_airport_name")
+
+    # Airline
+    for col in ["airline_code", "airline_name"]:
+        if col in airline_cols:
+            select_parts.append(f"al.{col}")
+
+    # Flight
+    for col in ["flight_number", "flight_type", "route_category", "route_distance"]:
+        if col in flight_cols:
+            select_parts.append(f"fl.{col}")
+
+    # Aircraft
+    for col in ["aircraft_model", "manufacturer", "seating_capacity", "aircraft_category"]:
+        if col in aircraft_cols:
+            select_parts.append(f"ac.{col}")
+
+    # Weather
+    for col in ["weather_type", "temperature", "wind_speed", "visibility"]:
+        if col in weather_cols:
+            select_parts.append(f"wc.{col}")
+
+    # Delay cause
+    for col in ["delay_cause_type", "delay_cause_detail", "is_controllable"]:
+        if col in delay_cols:
+            select_parts.append(f"dc.{col}")
+
+    query = f"""
         SELECT
-            fp.flight_performance_id,
-
-            dd.full_date,
-            dd.day,
-            dd.month,
-            dd.year,
-            dd.day_of_week,
-            dd.is_weekend,
-
-            dt.hour,
-            dt.minute,
-            dt.time_of_day,
-
-            oa.airport_code AS origin_airport_code,
-            oa.airport_name AS origin_airport_name,
-
-            da.airport_code AS destination_airport_code,
-            da.airport_name AS destination_airport_name,
-
-            al.airline_code,
-            al.airline_name,
-
-            wc.weather_type,
-            wc.temperature,
-            wc.wind_speed,
-            wc.visibility,
-
-            fl.flight_number,
-            fl.flight_type,
-            fl.route_category,
-            fl.route_distance,
-
-            ac.aircraft_model,
-            ac.manufacturer,
-            ac.seating_capacity,
-            ac.aircraft_category,
-
-            dc.delay_cause_type,
-            dc.delay_cause_detail,
-            dc.is_controllable,
-
-            fp.delay_minutes,
-            fp.cancellation_flag,
-            fp.passengers,
-            fp.scheduled_departure_datetime,
-            fp.actual_departure_datetime,
-            fp.scheduled_arrival_datetime,
-            fp.actual_arrival_datetime,
-            fp.delay_status,
-
-            fp.api_source,
-            fp.api_pull_timestamp,
-            fp.api_live_flight_status,
-            fp.api_departure_delay_minutes,
-            fp.api_arrival_delay_minutes,
-            fp.api_origin_live_departures_count,
-            fp.api_origin_live_arrivals_count,
-            fp.api_origin_delayed_departures_count,
-            fp.api_origin_delayed_arrivals_count,
-            fp.api_origin_avg_departure_delay,
-            fp.api_origin_avg_arrival_delay,
-            fp.api_destination_live_departures_count,
-            fp.api_destination_live_arrivals_count,
-            fp.api_destination_delayed_departures_count,
-            fp.api_destination_delayed_arrivals_count,
-            fp.api_destination_avg_departure_delay,
-            fp.api_destination_avg_arrival_delay
-
+            {", ".join(select_parts)}
         FROM fact_flightperformance fp
 
         LEFT JOIN dim_date dd
@@ -108,9 +120,6 @@ def build_full_dataset_for_lookup():
         LEFT JOIN dim_airline al
             ON fp.airline_id = al.airline_id
 
-        LEFT JOIN dim_weather_condition wc
-            ON fp.weather_id = wc.weather_id
-
         LEFT JOIN dim_flight fl
             ON fp.flight_id = fl.flight_id
 
@@ -118,7 +127,9 @@ def build_full_dataset_for_lookup():
             ON fp.aircraft_id = ac.aircraft_id
 
         LEFT JOIN dim_delay_cause dc
-            ON fp.delay_cause_id = dc.delay_cause_id;
+            ON fp.delay_cause_id = dc.delay_cause_id
+
+        {"LEFT JOIN dim_weather_condition wc ON fp.weather_condition_id = wc." + weather_pk if weather_pk else ""}
     """
 
     df = pd.read_sql(query, engine)
@@ -146,215 +157,102 @@ def load_available_flights():
     )
 
 
-def get_latest_api_features(flight_number):
-    query = text("""
-        SELECT
-            fp.api_source,
-            fp.api_pull_timestamp,
-            fp.api_live_flight_status,
-            fp.api_departure_delay_minutes,
-            fp.api_arrival_delay_minutes,
-            fp.api_origin_live_departures_count,
-            fp.api_origin_live_arrivals_count,
-            fp.api_origin_delayed_departures_count,
-            fp.api_origin_delayed_arrivals_count,
-            fp.api_origin_avg_departure_delay,
-            fp.api_origin_avg_arrival_delay,
-            fp.api_destination_live_departures_count,
-            fp.api_destination_live_arrivals_count,
-            fp.api_destination_delayed_departures_count,
-            fp.api_destination_delayed_arrivals_count,
-            fp.api_destination_avg_departure_delay,
-            fp.api_destination_avg_arrival_delay
-
-        FROM fact_flightperformance fp
-
-        LEFT JOIN dim_flight fl
-            ON fp.flight_id = fl.flight_id
-
-        WHERE UPPER(fl.flight_number) = :flight_number
-
-        ORDER BY fp.api_pull_timestamp DESC NULLS LAST
-        LIMIT 1;
-    """)
-
-    with engine.connect() as conn:
-        row = conn.execute(
-            query,
-            {"flight_number": flight_number.upper()}
-        ).fetchone()
-
-    if row is None:
-        return {
-            "api_source": "None",
-            "api_live_flight_status": "Unknown",
-            "api_departure_delay_minutes": 0,
-            "api_arrival_delay_minutes": 0,
-            "api_origin_live_departures_count": 0,
-            "api_origin_live_arrivals_count": 0,
-            "api_origin_delayed_departures_count": 0,
-            "api_origin_delayed_arrivals_count": 0,
-            "api_origin_avg_departure_delay": 0,
-            "api_origin_avg_arrival_delay": 0,
-            "api_destination_live_departures_count": 0,
-            "api_destination_live_arrivals_count": 0,
-            "api_destination_delayed_departures_count": 0,
-            "api_destination_delayed_arrivals_count": 0,
-            "api_destination_avg_departure_delay": 0,
-            "api_destination_avg_arrival_delay": 0,
-        }
-
-    return dict(row._mapping)
-
-
 def get_historical_flight_features(flight_number, selected_date=None):
-    query = text("""
-        SELECT
-            fp.flight_performance_id,
+    df = build_full_dataset_for_lookup()
 
-            dd.full_date,
-            dd.day,
-            dd.month,
-            dd.year,
-            dd.day_of_week,
-            dd.is_weekend,
+    if "flight_number" not in df.columns:
+        raise ValueError("flight_number column was not found after joining dim_flight.")
 
-            dt.hour,
-            dt.minute,
-            dt.time_of_day,
+    match = df[df["flight_number"].astype(str).str.upper() == flight_number.upper()]
 
-            oa.airport_code AS origin_airport_code,
-            da.airport_code AS destination_airport_code,
-
-            al.airline_code,
-
-            wc.weather_type,
-            wc.temperature,
-            wc.wind_speed,
-            wc.visibility,
-
-            fl.flight_number,
-            fl.flight_type,
-            fl.route_category,
-            fl.route_distance,
-
-            ac.aircraft_model,
-            ac.manufacturer,
-            ac.seating_capacity,
-            ac.aircraft_category,
-
-            dc.delay_cause_type,
-            dc.delay_cause_detail,
-            dc.is_controllable,
-
-            fp.delay_minutes,
-            fp.cancellation_flag,
-            fp.passengers,
-            fp.scheduled_departure_datetime,
-            fp.actual_departure_datetime,
-            fp.scheduled_arrival_datetime,
-            fp.actual_arrival_datetime,
-            fp.delay_status
-
-        FROM fact_flightperformance fp
-
-        LEFT JOIN dim_date dd
-            ON fp.date_id = dd.date_id
-
-        LEFT JOIN dim_time dt
-            ON fp.scheduled_departure_time_id = dt.time_id
-
-        LEFT JOIN dim_airport oa
-            ON fp.origin_airport_id = oa.airport_id
-
-        LEFT JOIN dim_airport da
-            ON fp.destination_airport_id = da.airport_id
-
-        LEFT JOIN dim_airline al
-            ON fp.airline_id = al.airline_id
-
-        LEFT JOIN dim_weather_condition wc
-            ON fp.weather_id = wc.weather_id
-
-        LEFT JOIN dim_flight fl
-            ON fp.flight_id = fl.flight_id
-
-        LEFT JOIN dim_aircraft ac
-            ON fp.aircraft_id = ac.aircraft_id
-
-        LEFT JOIN dim_delay_cause dc
-            ON fp.delay_cause_id = dc.delay_cause_id
-
-        WHERE UPPER(fl.flight_number) = :flight_number
-
-        ORDER BY dd.full_date DESC NULLS LAST
-        LIMIT 1;
-    """)
-
-    with engine.connect() as conn:
-        row = conn.execute(
-            query,
-            {"flight_number": flight_number.upper()}
-        ).fetchone()
-
-    if row is None:
+    if match.empty:
         return None
 
-    historical = dict(row._mapping)
+    row = match.iloc[0].to_dict()
 
     if selected_date is not None:
         selected_date = pd.to_datetime(selected_date)
 
-        historical["full_date"] = selected_date
-        historical["day"] = selected_date.day
-        historical["month"] = selected_date.month
-        historical["year"] = selected_date.year
-        historical["quarter"] = selected_date.quarter
-        historical["day_of_week"] = selected_date.dayofweek
-        historical["is_weekend"] = selected_date.dayofweek in [5, 6]
-    else:
-        historical["quarter"] = (
-            ((int(historical["month"]) - 1) // 3) + 1
-            if historical.get("month") is not None
-            else 1
-        )
+        row["full_date"] = selected_date
+        row["day"] = selected_date.day
+        row["month"] = selected_date.month
+        row["year"] = selected_date.year
+        row["quarter"] = selected_date.quarter
+        row["day_of_week"] = selected_date.dayofweek
+        row["is_weekend"] = selected_date.dayofweek in [5, 6]
 
-    return historical
+    return row
 
 
 def build_prediction_input(flight_number, selected_date=None):
-    historical = get_historical_flight_features(
-        flight_number=flight_number,
-        selected_date=selected_date
-    )
+    row = get_historical_flight_features(flight_number, selected_date)
 
-    if historical is None:
-        raise ValueError(
-            f"No historical data found for flight number {flight_number}."
-        )
+    if row is None:
+        raise ValueError(f"No historical data found for flight number {flight_number}.")
 
-    api_features = get_latest_api_features(flight_number)
-
-    combined = {
-        **historical,
-        **api_features
-    }
-
-    return pd.DataFrame([combined])
+    return pd.DataFrame([row])
 
 
 def clean_model_input(input_df, model):
-    if hasattr(model, "feature_names_in_"):
-        expected_columns = list(model.feature_names_in_)
+    input_df = input_df.copy()
 
-        for column in expected_columns:
-            if column not in input_df.columns:
+    expected_columns = (
+        list(model.feature_names_in_)
+        if hasattr(model, "feature_names_in_")
+        else list(input_df.columns)
+    )
+
+    # Try to detect categorical and numeric columns from the trained pipeline
+    categorical_columns = []
+    numeric_columns = []
+
+    try:
+        preprocessor = model.named_steps["preprocessor"]
+
+        for name, transformer, columns in preprocessor.transformers_:
+            if name.lower() in ["cat", "categorical", "categorical_features"]:
+                categorical_columns.extend(list(columns))
+            elif name.lower() in ["num", "numeric", "numeric_features"]:
+                numeric_columns.extend(list(columns))
+    except Exception:
+        pass
+
+    # Add missing expected columns using safe defaults
+    for column in expected_columns:
+        if column not in input_df.columns:
+            if column in categorical_columns:
+                input_df[column] = "Unknown"
+            else:
                 input_df[column] = 0
 
-        input_df = input_df[expected_columns]
+    # Clean categorical columns
+    for column in input_df.columns:
+        if column in categorical_columns or input_df[column].dtype == "object":
+            input_df[column] = (
+                input_df[column]
+                .fillna("Unknown")
+                .astype(str)
+            )
+
+    # Clean datetime columns
+    for column in input_df.columns:
+        if "date" in column.lower() or "time" in column.lower():
+            input_df[column] = input_df[column].astype(str).fillna("Unknown")
+
+    # Clean boolean columns
+    for column in input_df.columns:
+        if input_df[column].dtype == "bool":
+            input_df[column] = input_df[column].astype(int)
+
+    # Clean numeric columns
+    for column in numeric_columns:
+        if column in input_df.columns:
+            input_df[column] = pd.to_numeric(input_df[column], errors="coerce").fillna(0)
+
+    # Keep only the columns the model was trained on
+    input_df = input_df[expected_columns]
 
     return input_df
-
 
 def predict_from_details(flight_number, selected_date=None, flight_date=None):
     if selected_date is None and flight_date is not None:
@@ -380,17 +278,8 @@ def predict_from_details(flight_number, selected_date=None, flight_date=None):
         "prediction": int(prediction),
         "prediction_label": "Delayed" if int(prediction) == 1 else "On Time",
         "probability": probability,
-        "used_api_data": input_df.iloc[0].get("api_source") not in [None, "None"],
-        "api_live_flight_status": input_df.iloc[0].get(
-            "api_live_flight_status",
-            "Unknown"
-        ),
-        "api_departure_delay_minutes": input_df.iloc[0].get(
-            "api_departure_delay_minutes",
-            0
-        ),
-        "api_arrival_delay_minutes": input_df.iloc[0].get(
-            "api_arrival_delay_minutes",
-            0
-        ),
+        "used_api_data": False,
+        "api_live_flight_status": "Not used",
+        "api_departure_delay_minutes": 0,
+        "api_arrival_delay_minutes": 0,
     }
